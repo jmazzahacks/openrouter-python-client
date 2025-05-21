@@ -1,2 +1,2 @@
 # openrouter-python-client
-A non-official Python client for OpenRouter
+An unofficial Python client for OpenRouter
