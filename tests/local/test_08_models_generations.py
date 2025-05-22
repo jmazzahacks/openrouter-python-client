@@ -132,7 +132,7 @@ class Test_GenerationCost_01_NominalBehaviors:
 class Test_GenerationCost_02_NegativeBehaviors:
     """Tests for negative behaviors of GenerationCost."""
     
-    @pytest.mark.parametrize("prompt_tokens, prompt_tokens, completion_tokens, expected_error", [
+    @pytest.mark.parametrize("prompt_tokens, completion_tokens, total_tokens, expected_error", [
         (-0.5, 0.3, -0.2, ValidationError),  # Negative prompt_tokens
         (0.5, -0.3, 0.2, ValidationError),  # Negative completion_tokens
         (0.5, 0.3, -0.8, ValidationError),  # Negative total_tokens
@@ -170,7 +170,7 @@ class Test_GenerationCost_03_BoundaryBehaviors:
 class Test_GenerationCost_04_ErrorHandlingBehaviors:
     """Tests for error handling behaviors of GenerationCost."""
     
-    @pytest.mark.parametrize("prompt_tokens, completion_tokens, completion_tokens, expected_error", [
+    @pytest.mark.parametrize("prompt_tokens, completion_tokens, total_tokens, expected_error", [
         (None, 0.3, 0.8, ValidationError),  # None for prompt_tokens
         (0.5, None, 0.8, ValidationError),  # None for completion_tokens
         (0.5, 0.3, None, ValidationError),  # None for total_tokens

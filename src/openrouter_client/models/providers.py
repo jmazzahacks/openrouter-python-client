@@ -9,7 +9,7 @@ Exported:
 
 from typing import List, Optional, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class ProviderMaxPrice(BaseModel):
@@ -22,6 +22,8 @@ class ProviderMaxPrice(BaseModel):
         request (Optional[float]): Maximum price per request.
         image (Optional[float]): Maximum price per image.
     """
+    model_config = ConfigDict(strict=True)
+    
     prompt: Optional[float] = Field(None, ge=0.0, description="Maximum price per million prompt tokens")
     completion: Optional[float] = Field(None, ge=0.0, description="Maximum price per million completion tokens")
     request: Optional[float] = Field(None, ge=0.0, description="Maximum price per request")
@@ -43,6 +45,8 @@ class ProviderPreferences(BaseModel):
         sort (Optional[Literal["price", "throughput", "latency"]]): Sort providers by attribute.
         max_price (Optional[ProviderMaxPrice]): The maximum pricing to pay for this request.
     """
+    model_config = ConfigDict(strict=True)
+    
     order: Optional[List[str]] = Field(None, description="List of provider names to try in order")
     allow_fallbacks: Optional[bool] = Field(True, description="Whether to allow backup providers when the primary is unavailable")
     require_parameters: Optional[bool] = Field(False, description="Only use providers that support all parameters in the request")

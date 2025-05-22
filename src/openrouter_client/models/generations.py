@@ -327,3 +327,5 @@ class ModelStatsParams(BaseModel):
                 
             if end_date < start_date:
                 raise ValueError(f"end_date ({self.end_date}) must be >= start_date ({self.start_date})")
+        
+        return self
