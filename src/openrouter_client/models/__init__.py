@@ -44,7 +44,7 @@ from .completions import (
     CompletionsRequest,
     CompletionsResponse,
     CompletionsResponseChoice,
-    CompletionStreamResponse,
+    CompletionsStreamResponse,
     LogProbs,
 )
 
@@ -135,7 +135,7 @@ __all__ = [
     "CompletionsRequest",
     "CompletionsResponse",
     "CompletionsResponseChoice",
-    "CompletionStreamResponse",
+    "CompletionsStreamResponse",
     "LogProbs",
     
     # Models models

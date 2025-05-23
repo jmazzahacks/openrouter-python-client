@@ -167,7 +167,7 @@ class CompletionsResponse(BaseModel):
     system_fingerprint: Optional[str] = Field(None, description="System fingerprint for the completion")
 
 
-class CompletionStreamResponse(BaseModel):
+class CompletionsStreamResponse(BaseModel):
     """
     Stream response model for completions.
     
