@@ -34,6 +34,26 @@ class LogProbs(BaseModel):
     token_logprobs: List[float] = Field(..., description="Log probabilities of the tokens")
     top_logprobs: Optional[List[Dict[str, float]]] = Field(None, description="The most likely tokens for each position")
     text_offset: List[int] = Field(..., description="Character offsets for the tokens in the generated text")
+    
+    @model_validator(mode="after")
+    def validate_list_lengths(self) -> "LogProbs":
+        """
+        Validates that the lengths of the input lists are equal.
+
+        Args:
+            values (Dict[str, Any]): The input values.
+        
+        Returns:
+            self: The validated instance.
+        """
+        if len(self.tokens) != len(self.token_logprobs):
+            raise ValueError("All lists must have the same length")
+        if len(self.tokens) != len(self.text_offset):
+            raise ValueError("All lists must have the same length")
+        if self.top_logprobs is not None and len(self.tokens) != len(self.top_logprobs):
+            raise ValueError("All lists must have the same length")
+        
+        return self
 
 
 class CompletionsRequest(BaseModel):
@@ -41,7 +61,7 @@ class CompletionsRequest(BaseModel):
     Request model for completions.
     
     Attributes:
-        prompt (Union[str, List[str]]): The prompt to generate completions for.
+        prompt (str): The prompt to generate completions for.
         model (str): Model identifier to use.
         temperature (Optional[float]): Sampling temperature (0.0 to 2.0).
         top_p (Optional[float]): Nucleus sampling parameter (0.0 to 1.0).
@@ -76,8 +96,8 @@ class CompletionsRequest(BaseModel):
         transforms (Optional[List[str]]): OpenRouter-specific prompt transforms.
         route (Optional[str]): Model routing strategy, e.g., 'fallback'.
     """
-    prompt: Union[str, List[str]]
-    model: str
+    prompt: str = Field(..., min_length=1, description="The prompt to generate completions for")
+    model: str = Field(..., min_length=1, description="Model identifier to use")
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0, description="Sampling temperature")
     top_p: Optional[float] = Field(None, gt=0.0, le=1.0, description="Nucleus sampling parameter")
     max_tokens: Optional[int] = Field(None, gt=0, description="Maximum tokens to generate")
@@ -122,7 +142,7 @@ class CompletionsRequest(BaseModel):
         Raises:
             ValueError: If both functions and tools are specified.
         """
-        if self.functions and self.tools:
+        if self.functions is not None and self.tools is not None:
             raise ValueError("Cannot specify both 'functions' and 'tools' parameters")
         return self
 
@@ -139,7 +159,7 @@ class CompletionsResponseChoice(BaseModel):
         native_finish_reason (Optional[str]): The raw finish_reason from the provider.
     """
     text: str = Field(..., description="The generated text")
-    index: int = Field(..., description="Index of this choice in the list of choices")
+    index: int = Field(..., ge=0, description="Index of this choice in the list of choices")
     logprobs: Optional[LogProbs] = Field(None, description="Log probabilities for tokens if requested")
     finish_reason: Optional[FinishReason] = Field(None, description="The normalized reason why the model stopped generating tokens")
     native_finish_reason: Optional[str] = Field(None, description="The raw finish_reason from the provider")
