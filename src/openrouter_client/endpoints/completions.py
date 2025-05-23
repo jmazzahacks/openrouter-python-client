@@ -8,16 +8,21 @@ Exported:
 - CompletionsEndpoint: Handler for text completions endpoint
 """
 
-import logging
 from typing import Dict, List, Optional, Union, Any, Iterator
 
 from ..auth import AuthManager
 from ..http import HTTPManager
 from .base import BaseEndpoint
 from ..models import ToolChoice, FunctionParameters, FunctionToolChoice
-from ..models.chat import ReasoningConfig
+from ..models.core import FunctionDefinition, ResponseFormat, ToolDefinition
+from ..models.chat import ReasoningConfig, Usage
+from ..models.completions import (
+    LogProbs, CompletionsRequest, CompletionsResponseChoice,
+    CompletionsResponse, CompletionsStreamResponse
+)
 
 from ..streaming import StreamingCompletionsRequest
+from ..types import FinishReason
 from ..exceptions import StreamingError, ResumeError
 
 
@@ -39,6 +44,158 @@ class CompletionsEndpoint(BaseEndpoint):
         super().__init__(auth_manager, http_manager, 'completions')
         self.logger.info(f"Initialized completions endpoint handler")
     
+    def _parse_streaming_response(self, response_iterator: Iterator[Dict[str, Any]]) -> Iterator[CompletionsStreamResponse]:
+        """
+        Parse streaming response chunks into CompletionsStreamResponse models.
+        
+        Args:
+            response_iterator: Iterator of raw response dictionaries.
+            
+        Yields:
+            CompletionsStreamResponse: Parsed streaming response chunks.
+        """
+        for chunk in response_iterator:
+            try:
+                # Create a copy of the chunk to modify
+                modified_chunk = chunk.copy()
+                
+                # Parse choices into CompletionsResponseChoice objects
+                if 'choices' in chunk:
+                    parsed_choices = []
+                    for choice_data in chunk['choices']:
+                        try:
+                            modified_choice_data = choice_data.copy()
+                            
+                            # Parse finish reason
+                            if 'finish_reason' in choice_data and choice_data['finish_reason'] is not None:
+                                try:
+                                    parsed_finish_reason = FinishReason(choice_data['finish_reason'])
+                                    modified_choice_data['finish_reason'] = parsed_finish_reason.value
+                                except Exception as e:
+                                    self.logger.warning(f"Failed to parse streaming finish reason: {e}")
+                                    # Keep the raw finish reason if parsing fails
+                                    modified_choice_data['finish_reason'] = choice_data['finish_reason']
+                            
+                            # Parse logprobs if present
+                            if 'logprobs' in choice_data and choice_data['logprobs'] is not None:
+                                try:
+                                    parsed_logprobs = LogProbs.model_validate(choice_data['logprobs'])
+                                    modified_choice_data['logprobs'] = parsed_logprobs.model_dump()
+                                except Exception as e:
+                                    self.logger.warning(f"Failed to parse streaming logprobs: {e}")
+                                    # Keep the raw logprobs if parsing fails
+                                    modified_choice_data['logprobs'] = choice_data['logprobs']
+                            
+                            parsed_choice = CompletionsResponseChoice.model_validate(modified_choice_data)
+                            parsed_choices.append(parsed_choice.model_dump())
+                        except Exception as e:
+                            self.logger.warning(f"Failed to parse streaming choice: {e}")
+                            # Keep the raw choice data if parsing fails
+                            parsed_choices.append(choice_data)
+                    modified_chunk['choices'] = parsed_choices
+                
+                # Parse usage into Usage object if present
+                if 'usage' in chunk and chunk['usage'] is not None:
+                    try:
+                        parsed_usage = Usage.model_validate(chunk['usage'])
+                        modified_chunk['usage'] = parsed_usage.model_dump()
+                    except Exception as e:
+                        self.logger.warning(f"Failed to parse streaming usage: {e}")
+                        # Keep the raw usage data if parsing fails
+                        modified_chunk['usage'] = chunk['usage']
+                
+                # Validate the complete modified chunk
+                yield CompletionsStreamResponse.model_validate(modified_chunk)
+            except Exception as e:
+                self.logger.warning(f"Failed to parse streaming response chunk: {e}")
+                # Still yield the raw chunk to avoid breaking the stream
+                yield chunk
+    
+    def _create_request_model(self, prompt: str, model: Optional[str] = None, **kwargs) -> CompletionsRequest:
+        """
+        Create and validate a CompletionsRequest model.
+        
+        Args:
+            prompt: The text prompt to complete.
+            model: Model identifier to use.
+            **kwargs: Additional parameters.
+            
+        Returns:
+            CompletionsRequest: Validated request model.
+            
+        Raises:
+            ValueError: If the request parameters are invalid.
+        """
+        # Build request data with validated nested components
+        request_data = {"prompt": prompt}
+        
+        # Add model if provided
+        if model is not None:
+            request_data["model"] = model
+        
+        # Parse nested components from kwargs
+        for key, value in kwargs.items():
+            if value is not None:
+                if key == "tools" and isinstance(value, list):
+                    # Parse tools into ToolDefinition objects
+                    parsed_tools = []
+                    for tool_data in value:
+                        try:
+                            if isinstance(tool_data, ToolDefinition):
+                                parsed_tools.append(tool_data.model_dump())
+                            else:
+                                parsed_tool = ToolDefinition.model_validate(tool_data)
+                                parsed_tools.append(parsed_tool.model_dump())
+                        except Exception as e:
+                            self.logger.warning(f"Failed to parse tool: {e}")
+                            # Keep raw tool if parsing fails
+                            parsed_tools.append(tool_data)
+                    request_data[key] = parsed_tools
+                elif key == "functions" and isinstance(value, list):
+                    # Parse functions into FunctionDefinition objects
+                    parsed_functions = []
+                    for func_data in value:
+                        try:
+                            if isinstance(func_data, FunctionDefinition):
+                                parsed_functions.append(func_data.model_dump())
+                            else:
+                                parsed_function = FunctionDefinition.model_validate(func_data)
+                                parsed_functions.append(parsed_function.model_dump())
+                        except Exception as e:
+                            self.logger.warning(f"Failed to parse function: {e}")
+                            # Keep raw function if parsing fails
+                            parsed_functions.append(func_data)
+                    request_data[key] = parsed_functions
+                elif key == "reasoning":
+                    # Parse reasoning into ReasoningConfig object
+                    if isinstance(value, ReasoningConfig):
+                        request_data[key] = value.model_dump(exclude_none=True)
+                    elif isinstance(value, dict):
+                        try:
+                            parsed_reasoning = ReasoningConfig.model_validate(value)
+                            request_data[key] = parsed_reasoning.model_dump(exclude_none=True)
+                        except Exception as e:
+                            self.logger.warning(f"Failed to parse reasoning config: {e}")
+                            # Keep raw reasoning if parsing fails
+                            request_data[key] = value
+                    else:
+                        request_data[key] = value
+                elif key == "response_format" and isinstance(value, dict):
+                    # Parse response_format into ResponseFormat object
+                    try:
+                        parsed_response_format = ResponseFormat.model_validate(value)
+                        request_data[key] = parsed_response_format.model_dump()
+                    except Exception as e:
+                        self.logger.warning(f"Failed to parse response format: {e}")
+                        # Keep raw response_format if parsing fails
+                        request_data[key] = value
+                else:
+                    # For other parameters, use them as-is
+                    request_data[key] = value
+            
+        # Create and validate the request model
+        return CompletionsRequest.model_validate(request_data)
+    
     def create(self, prompt: str, 
               model: Optional[str] = None, temperature: Optional[float] = None, 
               top_p: Optional[float] = None, max_tokens: Optional[int] = None,
@@ -48,13 +205,14 @@ class CompletionsEndpoint(BaseEndpoint):
               frequency_penalty: Optional[float] = None, user: Optional[str] = None,
               functions: Optional[List[FunctionParameters]] = None,
               function_call: Optional[Union[str, FunctionToolChoice]] = None,
-              tools: Optional[List[Dict[str, Any]]] = None,
+              tools: Optional[List[ToolDefinition]] = None,
               tool_choice: Optional[ToolChoice] = None,
               response_format: Optional[Dict[str, Any]] = None,
               reasoning: Optional[Union[Dict[str, Any], ReasoningConfig]] = None,
               include_reasoning: Optional[bool] = None,
               state_file: Optional[str] = None, chunk_size: int = 8192,
-              **kwargs) -> Union[Dict[str, Any], Iterator[Dict[str, Any]]]:
+              validate_request: bool = False,
+               **kwargs) -> Union[CompletionsResponse, Iterator[CompletionsStreamResponse]]:
         """
         Create a text completion for a prompt.
         
@@ -74,7 +232,7 @@ class CompletionsEndpoint(BaseEndpoint):
             user (Optional[str]): User identifier for tracking.
             functions (Optional[List[FunctionParameters]]): Function definitions with JSON Schema parameters.
             function_call (Optional[Union[str, FunctionToolChoice]]): Function calling control ("auto", "none", or a specific function).
-            tools (Optional[List[Dict[str, Any]]]): Tool definitions.
+            tools (Optional[List[ToolDefinition]]): Tool definitions.
             tool_choice (Optional[ToolChoice]): Tool choice control ("auto", "none", or a specific function).
             response_format (Optional[Dict[str, Any]]): Format specification for response.
             reasoning (Optional[Union[Dict[str, Any], ReasoningConfig]]): Control reasoning tokens settings.
@@ -84,16 +242,35 @@ class CompletionsEndpoint(BaseEndpoint):
                 When True, equivalent to reasoning={}, when False, equivalent to reasoning={'exclude': True}.
             state_file (Optional[str]): File path to save streaming state for resumption.
             chunk_size (int): Size of chunks for streaming responses.
+            validate_request (bool): Whether to validate the request using CompletionsRequest model.
             **kwargs: Additional parameters to pass to the API.
             
         Returns:
-            Union[Dict[str, Any], Iterator[Dict[str, Any]]]: Either a JSON response (non-streaming) 
-            or an iterator of response chunks (streaming).
+            Union[CompletionsResponse, Iterator[CompletionsStreamResponse]]: Either a parsed 
+            response model (non-streaming) or an iterator of parsed response chunks (streaming).
             
         Raises:
             APIError: If the API request fails.
             StreamingError: If the streaming request fails.
         """
+        # Optionally validate the request using CompletionsRequest model
+        if validate_request:
+            try:
+                request_params = {
+                    'temperature': temperature, 'top_p': top_p, 'max_tokens': max_tokens,
+                    'stop': stop, 'n': n, 'stream': stream, 'logprobs': logprobs,
+                    'echo': echo, 'presence_penalty': presence_penalty,
+                    'frequency_penalty': frequency_penalty, 'user': user, 'functions': functions,
+                    'function_call': function_call, 'tools': tools, 'tool_choice': tool_choice,
+                    'response_format': response_format, 'reasoning': reasoning,
+                    'include_reasoning': include_reasoning, **kwargs
+                }
+                validated_request = self._create_request_model(prompt, model, **request_params)
+                self.logger.debug("Request validation successful")
+            except Exception as e:
+                self.logger.error(f"Request validation failed: {e}")
+                raise ValueError(f"Invalid request parameters: {e}")
+        
         # Build data dictionary with non-None values that will be used for both streaming and non-streaming
         data = {"prompt": prompt}
         
@@ -183,7 +360,7 @@ class CompletionsEndpoint(BaseEndpoint):
             # Start streaming
             try:
                 streamer.start()
-                return streamer.get_result()
+                return self._parse_streaming_response(streamer.get_result())
             except Exception as e:
                 self.logger.error(f"Streaming completions failed: {e}")
                 raise StreamingError(
@@ -201,10 +378,15 @@ class CompletionsEndpoint(BaseEndpoint):
                 json=data  # Use the single data dictionary
             )
             
-            # Return parsed JSON response
-            return response.json()
+            # Parse and return CompletionsResponse model
+            try:
+                return CompletionsResponse.model_validate(response.json())
+            except Exception as e:
+                self.logger.warning(f"Failed to parse completions response: {e}")
+                # Fall back to raw response if parsing fails
+                return response.json()
     
-    def resume_stream(self, state_file: str) -> Iterator[Dict[str, Any]]:
+    def resume_stream(self, state_file: str) -> Iterator[CompletionsStreamResponse]:
         """
         Resume a streaming completions request from saved state.
         
@@ -212,7 +394,7 @@ class CompletionsEndpoint(BaseEndpoint):
             state_file (str): File containing the saved state.
             
         Returns:
-            Iterator[Dict[str, Any]]: Resumed stream of completion chunks.
+            Iterator[CompletionsStreamResponse]: Resumed stream of parsed completion chunks.
             
         Raises:
             ResumeError: If resuming the request fails.
@@ -230,7 +412,7 @@ class CompletionsEndpoint(BaseEndpoint):
         # Resume streaming
         try:
             streamer.resume()
-            return streamer.get_result()
+            return self._parse_streaming_response(streamer.get_result())
         except Exception as e:
             self.logger.error(f"Resuming completions stream failed: {e}")
             raise ResumeError(
