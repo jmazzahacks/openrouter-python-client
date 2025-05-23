@@ -37,9 +37,10 @@ Exported Function-Calling Models:
 """
 
 from enum import Enum
-from typing import Dict, List, Optional, Any, Union, Literal
+import json
+from typing import Annotated, Dict, List, Optional, Any, Union, Literal
 
-from pydantic import BaseModel, Field, model_validator, field_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 
 from ..types import ModelRole, FinishReason
 from .core import Message, FunctionDefinition, ResponseFormat, ToolDefinition, Prediction
@@ -57,11 +58,11 @@ class Usage(BaseModel):
         cached_tokens (Optional[int]): Number of tokens served from cache.
         cache_discount (Optional[float]): Discount amount applied due to cached tokens.
     """
-    prompt_tokens: int = Field(..., description="Number of tokens in the prompt")
-    completion_tokens: int = Field(..., description="Number of tokens in the completion")
-    total_tokens: int = Field(..., description="Total number of tokens used")
-    cached_tokens: Optional[int] = Field(None, description="Number of tokens served from cache")
-    cache_discount: Optional[float] = Field(None, description="Discount amount applied due to cached tokens")
+    prompt_tokens: int = Field(..., ge=0, description="Number of tokens in the prompt")
+    completion_tokens: int = Field(..., ge=0, description="Number of tokens in the completion")
+    total_tokens: int = Field(..., ge=0, description="Total number of tokens used")
+    cached_tokens: Optional[int] = Field(None, ge=0, description="Number of tokens served from cache")
+    cache_discount: Optional[float] = Field(None, ge=0, description="Discount amount applied due to cached tokens")
 
 
 class ChatCompletionFunction(BaseModel):
@@ -72,9 +73,17 @@ class ChatCompletionFunction(BaseModel):
         name (str): Name of the function to call.
         arguments (str): String containing the function arguments as a JSON object.
     """
-    name: str = Field(..., description="Name of the function to call")
-    arguments: str = Field(..., description="String containing the function arguments as a JSON object")
+    name: str = Field(..., min_length=1, description="Name of the function to call")
+    arguments: str = Field(..., min_length=1, description="String containing the function arguments as a JSON object")
 
+    @field_validator("arguments")
+    def validate_arguments(cls, value):
+        try:
+            json.loads(value)
+        except json.JSONDecodeError:
+            raise ValueError("Invalid JSON")
+        
+        return value
 
 class ChatCompletionFunctionCall(BaseModel):
     """
@@ -83,7 +92,9 @@ class ChatCompletionFunctionCall(BaseModel):
     Attributes:
         name (Optional[str]): Name of the function to call.
     """
-    name: Optional[str] = Field(None, description="Name of the function to call")
+    model_config = ConfigDict(extra='forbid')
+    
+    name: Optional[str] = Field(None, min_length=1, description="Name of the function to call")
 
 
 class ToolCallFunction(BaseModel):
@@ -94,8 +105,17 @@ class ToolCallFunction(BaseModel):
         name (str): Name of the function to call.
         arguments (str): String containing the function arguments as a JSON object.
     """
-    name: str = Field(..., description="Name of the function to call")
-    arguments: str = Field(..., description="String containing the function arguments as a JSON object")
+    name: str = Field(..., min_length=1, description="Name of the function to call")
+    arguments: str = Field(..., min_length=1, description="String containing the function arguments as a JSON object")
+    
+    @field_validator("arguments")
+    def validate_arguments(cls, value):
+        try:
+            json.loads(value)
+        except json.JSONDecodeError:
+            raise ValueError("Invalid JSON")
+
+        return value
 
 
 class ChatCompletionToolCall(BaseModel):
@@ -386,7 +406,7 @@ class ParameterDefinition(BaseModel):
         enum (Optional[List[Any]]): List of allowed values for the parameter.
         default (Optional[Any]): Default value for the parameter.
     """
-    type: Union[ParameterType, List[ParameterType]] = Field(..., description="Type of the parameter")
+    type: Union[ParameterType, Annotated[List[ParameterType], Field(min_length=1)]] = Field(..., description="Type of the parameter")
     description: Optional[str] = Field(None, description="Description of the parameter")
     enum: Optional[List[Any]] = Field(None, description="List of allowed values for the parameter")
     default: Optional[Any] = Field(None, description="Default value for the parameter")
@@ -535,8 +555,8 @@ class FunctionCall(BaseModel):
         arguments (str): String containing the function arguments as a JSON object.
         id (Optional[str]): Unique ID for the function call.
     """
-    name: str = Field(..., description="Name of the function to call")
-    arguments: str = Field(..., description="String containing the function arguments as a JSON object")
+    name: str = Field(..., min_length=1, description="Name of the function to call")
+    arguments: str = Field(..., min_length=1, description="String containing the function arguments as a JSON object")
     id: Optional[str] = Field(None, description="Unique ID for the function call")
 
 
@@ -549,7 +569,7 @@ class FunctionCallResult(BaseModel):
         arguments (Dict[str, Any]): Arguments that were passed to the function.
         result (Any): Result of the function call.
     """
-    name: str = Field(..., description="Name of the function that was called")
+    name: str = Field(..., min_length=1, description="Name of the function that was called")
     arguments: Dict[str, Any] = Field(..., description="Arguments that were passed to the function")
     result: Any = Field(..., description="Result of the function call")
 
@@ -562,7 +582,7 @@ class StructuredToolResult(BaseModel):
         tool_call_id (str): ID of the tool call this result is for.
         function (FunctionCallResult): Result of the function call.
     """
-    tool_call_id: str = Field(..., description="ID of the tool call this result is for")
+    tool_call_id: str = Field(..., min_length=1, description="ID of the tool call this result is for")
     function: FunctionCallResult = Field(..., description="Result of the function call")
 
 

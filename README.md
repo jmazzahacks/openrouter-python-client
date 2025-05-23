@@ -10,10 +10,12 @@ An unofficial Python client for [OpenRouter](https://openrouter.ai/), providing 
 - **Rate Limiting & Retries**: Built-in rate limiting and retry logic for reliable API communication
 - **Type Safety**: Fully typed interfaces with Pydantic models
 - **Async Support**: Both synchronous and asynchronous API interfaces
-- **Safe Key Management**: Safely manage API keys with in-memory encryption
+- **Safe Key Management**: Safely manage API keys with in-memory encryption and adapter class for using your choice of external key management system
 - **Tiered API**: High-level client class, mid-level helper functions, and low-level endpoint and request classes
 
 ## Installation
+
+> **Note**: The PyPi package won't be published until initial testing for `openrouter-client-unofficial` is complete.
 
 ```bash
 pip install openrouter-client-unofficial

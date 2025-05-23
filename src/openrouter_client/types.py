@@ -31,12 +31,13 @@ class FinishReason(str, Enum):
     """Reasons why a completion or generation finished.
     
     The API normalizes each model's finish_reason to one of the following values:
-    tool_calls, stop, length, content_filter, error.
+    tool_calls, function_call, stop, length, content_filter, error.
     """
     STOP = "stop"
     LENGTH = "length"
     CONTENT_FILTER = "content_filter"
     TOOL_CALLS = "tool_calls"
+    FUNCTION_CALL = "function_call"
     ERROR = "error"
     NULL = None
 
