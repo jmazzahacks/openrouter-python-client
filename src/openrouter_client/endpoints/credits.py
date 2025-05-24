@@ -8,7 +8,6 @@ Exported:
 - CreditsEndpoint: Handler for credits endpoint
 """
 
-import logging
 from typing import Dict, Optional, Union, Any
 from datetime import datetime
 
