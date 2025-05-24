@@ -11,21 +11,30 @@ Exported:
 import logging
 from typing import Dict, TypeVar
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from ..auth import AuthManager
 from ..http import HTTPManager
 
 T = TypeVar('T')
 
 
-class BaseEndpoint:
+class BaseEndpoint(BaseModel):
     """
     Base class for all API endpoint handlers.
     
     Attributes:
         auth_manager (AuthManager): Authentication manager.
         http_manager (HTTPManager): HTTP communication manager.
+        endpoint_path (str): Relative API endpoint path.
         logger (logging.Logger): Endpoint-specific logger.
     """
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
+    auth_manager: AuthManager = Field(..., description="Authentication manager")
+    http_manager: HTTPManager = Field(..., description="HTTP communication manager")
+    endpoint_path: str = Field(..., description="Relative API endpoint path")
+    logger: logging.Logger = Field(..., description="Endpoint-specific logger")
     
     def __init__(self, 
                  auth_manager: AuthManager,
@@ -39,17 +48,25 @@ class BaseEndpoint:
             http_manager (HTTPManager): HTTP communication manager.
             endpoint_path (str): Relative API endpoint path.
         """
-        # Store the auth_manager for authentication
-        self.auth_manager = auth_manager
+        # Create a logger specific to this endpoint type with error handling
+        try:
+            logger = logging.getLogger(f"openrouter_client.endpoints.{self.__class__.__name__.lower()}")
+        except Exception:
+            # Fallback to module-level logger if endpoint-level logger fails
+            try:
+                logger = logging.getLogger(__name__)
+            except Exception:
+                # Fallback to root logger if module-level logger fails
+                logger = logging.getLogger()
         
-        # Store the http_manager for making HTTP requests
-        self.http_manager = http_manager
+        super().__init__(
+            auth_manager=auth_manager,
+            http_manager=http_manager,
+            endpoint_path=endpoint_path,
+            logger=logger
+        )
         
-        # Store the endpoint_path for forming full endpoint URLs
-        self.endpoint_path = endpoint_path.lstrip('/')
-        
-        # Create a logger specific to this endpoint type
-        self.logger = logging.getLogger(f"openrouter_client.endpoints.{self.__class__.__name__.lower()}")
+        self.endpoint_path = self.endpoint_path.lstrip('/').rstrip('/')
     
     def _get_headers(self, require_provisioning: bool = False) -> Dict[str, str]:
         """
@@ -72,7 +89,9 @@ class BaseEndpoint:
         
         # Return the combined headers
         headers = {**standard_headers, **auth_headers}
+        
         self.logger.debug(f"Generated headers for API request")
+        
         return headers
     
     def _get_endpoint_url(self, path: str = "") -> str:
@@ -98,6 +117,7 @@ class BaseEndpoint:
         else:
             # Only additional path exists
             url = path
-            
+        
         self.logger.debug(f"Generated endpoint URL: {url}")
+        
         return url

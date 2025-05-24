@@ -10,6 +10,7 @@ src/openrouter_client_unofficial.egg-info/*
 AGENT.md
 api_reference.md
 api_streaming.md
+CLAUDE.md
 file_skeletons.md
 layout.md
 openrouter_api_spec.md
