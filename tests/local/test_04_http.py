@@ -178,7 +178,7 @@ class Test_HTTPManager_Request_01_NominalBehaviors:
         http_manager.client.request.assert_called_once()
         call_args = http_manager.client.request.call_args[1]
         assert call_args["method"] == method.value
-        assert call_args["url"] == expected_url
+        assert call_args["endpoint"] == expected_url
     
     @pytest.mark.parametrize(
         "payload_type,payload,expected_param",
@@ -288,7 +288,7 @@ class Test_HTTPManager_Request_03_BoundaryBehaviors:
         # Verify
         http_manager.client.request.assert_called_once()
         call_args = http_manager.client.request.call_args[1]
-        assert call_args["url"] == expected_url
+        assert call_args["endpoint"] == expected_url
 
 
 class Test_HTTPManager_Request_04_ErrorHandlingBehaviors:

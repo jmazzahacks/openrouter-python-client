@@ -8,22 +8,24 @@ Exported:
 - CompletionsEndpoint: Handler for text completions endpoint
 """
 
-from typing import Dict, List, Optional, Union, Any, Iterator
+from typing import Any, Dict, Iterator, List, Optional, Union
 
 from ..auth import AuthManager
+from ..exceptions import ResumeError, StreamingError
 from ..http import HTTPManager
-from .base import BaseEndpoint
-from ..models import ToolChoice, FunctionParameters, FunctionToolChoice
-from ..models.core import FunctionDefinition, ResponseFormat, ToolDefinition
+from ..models import FunctionParameters, FunctionToolChoice, ToolChoice
 from ..models.chat import ReasoningConfig, Usage
 from ..models.completions import (
-    LogProbs, CompletionsRequest, CompletionsResponseChoice,
-    CompletionsResponse, CompletionsStreamResponse
+    CompletionsRequest,
+    CompletionsResponse,
+    CompletionsResponseChoice,
+    CompletionsStreamResponse,
+    LogProbs,
 )
-
+from ..models.core import FunctionDefinition, ResponseFormat, ToolDefinition
 from ..streaming import StreamingCompletionsRequest
 from ..types import FinishReason
-from ..exceptions import StreamingError, ResumeError
+from .base import BaseEndpoint
 
 
 class CompletionsEndpoint(BaseEndpoint):
@@ -415,8 +417,13 @@ class CompletionsEndpoint(BaseEndpoint):
             return self._parse_streaming_response(streamer.get_result())
         except Exception as e:
             self.logger.error(f"Resuming completions stream failed: {e}")
+            if hasattr(streamer, 'position'):
+                position = streamer.position
+            else:
+                position = None
             raise ResumeError(
                 f"Resuming completions stream failed: {e}",
                 state_file=state_file,
+                position=position,
                 original_error=e
             )

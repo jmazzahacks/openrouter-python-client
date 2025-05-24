@@ -162,7 +162,7 @@ class HTTPManager:
             try:
                 response, history = self.client.request(
                     method=method.value,
-                    url=url,
+                    endpoint=url,
                     headers=headers,
                     params=params,
                     json=json,

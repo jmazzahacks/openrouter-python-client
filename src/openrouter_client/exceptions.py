@@ -243,7 +243,9 @@ class ResumeError(StreamingError):
     
     def __init__(self,
                  message: str,
+                 state_file: Optional[str] = None,
                  position: Optional[int] = None,
+                 original_error: Optional[Exception] = None,
                  **kwargs):
         """
         Initialize the exception.
@@ -254,4 +256,6 @@ class ResumeError(StreamingError):
             **kwargs: Additional error details.
         """
         self.position = position
+        self.state_file = state_file
+        self.original_error = original_error
         super().__init__(message, position=position, **kwargs)
