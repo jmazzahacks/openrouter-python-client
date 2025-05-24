@@ -8,25 +8,30 @@ Exported:
 - ChatEndpoint: Handler for chat completions endpoint
 """
 
-import logging
-from typing import Dict, List, Optional, Union, Any, Iterator
+from typing import Any, Dict, Iterator, List, Optional, Union
 
 from ..auth import AuthManager
+from ..exceptions import ResumeError, StreamingError
 from ..http import HTTPManager
-from .base import BaseEndpoint
-from ..models import Message, ToolChoice, FunctionParameters
-from ..models.core import FunctionDefinition, ResponseFormat
+from ..models import FunctionParameters, Message, ToolChoice
 from ..models.chat import (
-    ReasoningConfig, ChatCompletionResponse, ChatCompletionStreamResponse,
-    ChatCompletionRequest, ChatCompletionFunction, ChatCompletionFunctionCall,
-    ToolCallFunction, ChatCompletionToolCall, ToolCallChunk, ChatCompletionTool,
-    ChatCompletionResponseChoice, ChatCompletionStreamResponseDelta,
-    ChatCompletionStreamResponseChoice, FunctionCall, FunctionCallResult,
-    StructuredToolResult, FunctionToolChoice, Usage
+    ChatCompletionFunction,
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+    ChatCompletionStreamResponse,
+    ChatCompletionStreamResponseChoice,
+    ChatCompletionStreamResponseDelta,
+    ChatCompletionTool,
+    ChatCompletionToolCall,
+    FunctionToolChoice,
+    ReasoningConfig,
+    ToolCallFunction,
+    Usage,
 )
+from ..models.core import FunctionDefinition, ResponseFormat
 from ..streaming import StreamingChatCompletionsRequest
 from ..types import FinishReason
-from ..exceptions import StreamingError, ResumeError
+from .base import BaseEndpoint
 
 
 class ChatEndpoint(BaseEndpoint):
