@@ -8,10 +8,9 @@ Exported:
 - ImagesEndpoint: Handler for images endpoint
 """
 
-import logging
-import base64
 import os
-from typing import Dict, List, Optional, Union, Any, BinaryIO
+import re
+from typing import Dict, Optional, Union, Any, BinaryIO
 
 from ..auth import AuthManager
 from ..http import HTTPManager
@@ -67,20 +66,35 @@ class ImagesEndpoint(BaseEndpoint):
         Raises:
             APIError: If the API request fails.
         """
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError("Prompt cannot be empty")
+        
         # Prepare request data with prompt and parameters
         data = {"prompt": prompt}
         
         if model is not None:
+            if not isinstance(model, str) or not model.strip():
+                raise ValueError("Model cannot be empty")
             data["model"] = model
         if n is not None:
+            if not isinstance(n, int) or n <= 0:
+                raise ValueError("n must be a positive integer")
             data["n"] = n
         if size is not None:
+            if not isinstance(size, str) or re.match(r"^\d+x\d+$", size) is None:
+                raise ValueError("Size cannot be empty")
             data["size"] = size
         if response_format is not None:
+            if not isinstance(response_format, str) or response_format not in ["url", "b64_json"]:
+                raise ValueError("Response format cannot be empty")
             data["response_format"] = response_format
         if quality is not None:
+            if not isinstance(quality, str) or quality not in ["standard", "hd"]:
+                raise ValueError("Quality must be a string and must be either 'standard' or 'hd'")
             data["quality"] = quality
         if style is not None:
+            if not isinstance(style, str) or not style.strip():
+                raise ValueError("Style cannot be empty")
             data["style"] = style
             
         # Add any additional kwargs to data
