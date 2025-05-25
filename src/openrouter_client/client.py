@@ -9,7 +9,7 @@ Exported:
 """
 
 import logging
-from typing import Dict, Optional, Any, Union
+from typing import Dict, Optional, Any
 
 from .auth import AuthManager, SecretsManager
 from .http import HTTPManager
@@ -205,6 +205,9 @@ class OpenRouterClient:
             if isinstance(models_data, dict) and 'data' in models_data:
                 # Extract from data array if present
                 models_list = models_data['data']
+                # Ensure models_list is actually a list
+                if not isinstance(models_list, list):
+                    models_list = []
             elif isinstance(models_data, list):
                 # Or use directly if it's already a list
                 models_list = models_data
@@ -248,7 +251,11 @@ class OpenRouterClient:
         Returns:
             int: The context length for the model, or 4096 if not found.
         """
-        return self._context_lengths.get(model_id, 4096)
+        try:
+            return self._context_lengths.get(model_id, 4096)
+        except TypeError:
+            # Handle unhashable types (e.g., lists, dicts) gracefully
+            return 4096
 
     def calculate_rate_limits(self) -> Dict[str, Any]:
         """
@@ -267,10 +274,22 @@ class OpenRouterClient:
             # Retrieve credit information from the credits endpoint
             credits_info = self.credits.get()
             
+            # Handle None or invalid responses
+            if not isinstance(credits_info, dict):
+                credits_info = {}
+            
             # Extract remaining credits and credit refresh rate
             remaining_credits = credits_info.get('remaining', 0)
+            if not isinstance(remaining_credits, (int, float)):
+                remaining_credits = 0
+            
             refresh_rate = credits_info.get('refresh_rate', {}) or {}
+            if not isinstance(refresh_rate, dict):
+                refresh_rate = {}
+            
             seconds_until_refresh = refresh_rate.get('seconds', 3600)  # Default to 1 hour
+            if not isinstance(seconds_until_refresh, (int, float)):
+                seconds_until_refresh = 3600
             
             # Calculate appropriate rate limits based on remaining credits
             requests_per_period = max(1, int(remaining_credits / 10))  # Use 10% of credits per period
@@ -311,13 +330,21 @@ class OpenRouterClient:
         
         # Close the HTTP manager to release network resources
         if hasattr(self, 'http_manager') and self.http_manager is not None:
-            self.http_manager.close()
+            try:
+                self.http_manager.close()
+            except Exception as e:
+                # Log the error but continue with cleanup
+                self.logger.error(f"Error closing HTTP manager: {str(e)}")
         
         # Clear all endpoint instances to release their resources
         for endpoint_name in ['completions', 'chat', 'models', 'images', 'generations', 
                              'credits', 'keys', 'plugins', 'web']:
             if hasattr(self, endpoint_name):
-                setattr(self, endpoint_name, None)
+                try:
+                    setattr(self, endpoint_name, None)
+                except Exception as e:
+                    # Log the error but continue with cleanup
+                    self.logger.error(f"Error clearing {endpoint_name}: {str(e)}")
         
         # Log successful client shutdown
         self.logger.info("OpenRouterClient shut down successfully")
