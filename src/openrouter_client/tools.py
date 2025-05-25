@@ -74,7 +74,13 @@ def infer_parameter_type(python_type: Type) -> Union[ParameterType, List[Paramet
     origin = get_origin(python_type)
     if origin is Union:
         args = get_args(python_type)
-        # Cast to ensure type consistency
+        # Check if it's an Optional type first (Union with None)
+        if type(None) in args:
+            non_none_args = [arg for arg in args if arg is not type(None)]
+            # For Optional[T], always return T's type rather than Union[T, None]
+            if len(non_none_args) == 1:
+                return infer_parameter_type(non_none_args[0])
+        # Otherwise return list of all types
         return [infer_parameter_type(arg) for arg in args]  # type: ignore
         
     # Handle List and Dict with type arguments
@@ -82,15 +88,6 @@ def infer_parameter_type(python_type: Type) -> Union[ParameterType, List[Paramet
         return ParameterType.ARRAY
     elif origin is dict:
         return ParameterType.OBJECT
-        
-    # Handle Optional (Union with NoneType)
-    if origin is Union and type(None) in get_args(python_type):
-        non_none_args = [arg for arg in get_args(python_type) if arg is not type(None)]
-        # For Optional[T], always return T's type rather than Union[T, None]
-        if len(non_none_args) == 1:
-            return infer_parameter_type(non_none_args[0])
-        else:
-            return [infer_parameter_type(arg) for arg in non_none_args]  # type: ignore
             
     # Handle Enum types
     if inspect.isclass(python_type) and issubclass(python_type, Enum):
@@ -99,6 +96,10 @@ def infer_parameter_type(python_type: Type) -> Union[ParameterType, List[Paramet
     # Handle Pydantic models
     if inspect.isclass(python_type) and issubclass(python_type, BaseModel):
         return ParameterType.OBJECT
+    
+    # Handle Any type - default to string
+    if python_type is Any:
+        return ParameterType.STRING
         
     raise ValueError(f"Cannot map Python type {python_type} to an OpenRouter parameter type")
 
@@ -823,7 +824,7 @@ def create_tool_call_from_dict(
 
 # Prompt caching helper functions
 
-def cache_control(type: str = "ephemeral") -> CacheControl:
+def cache_control(type: Optional[str] = "ephemeral") -> CacheControl:
     """
     Create a cache control object for prompt caching.
     
@@ -841,6 +842,9 @@ def cache_control(type: str = "ephemeral") -> CacheControl:
     Example:
         >>> cached_content = create_cached_content("This is cached content", cache_control())
     """
+    # Use default value if None is passed
+    if type is None:
+        type = "ephemeral"
     return CacheControl(type=type)
 
 
