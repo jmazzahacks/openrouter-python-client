@@ -184,7 +184,7 @@ class ModelData(BaseModel):
         description (Optional[str]): Optional description of the model.
         context_length (int): Maximum context length in tokens.
         max_completion_tokens (Optional[int]): Optional maximum tokens in completions.
-        quantization (str): Model quantization level (e.g., "fp16").
+        quantization (Optional[str]): Optional model quantization level (e.g., "fp16").
         pricing (ModelPricing): Pricing information for the model.
     """
     id: str = Field(..., description="Model identifier (provider/model-name)")
@@ -193,7 +193,7 @@ class ModelData(BaseModel):
     description: Optional[str] = Field(None, description="Optional description of the model")
     context_length: int = Field(..., description="Maximum context length in tokens")
     max_completion_tokens: Optional[int] = Field(None, description="Optional maximum tokens in completions")
-    quantization: str = Field(..., description="Model quantization level (e.g., \"fp16\")")
+    quantization: Optional[str] = Field(None, description="Optional model quantization level (e.g., \"fp16\")")
     pricing: ModelPricing = Field(..., description="Pricing information for the model")
 
 

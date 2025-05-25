@@ -201,9 +201,12 @@ class OpenRouterClient:
             
             # Process the retrieved models data
             context_lengths = {}
-            # When details=True, models_data is the full response which might have a different structure
-            if isinstance(models_data, dict) and 'data' in models_data:
-                # Extract from data array if present
+            # When details=True, models_data is a ModelsResponse object
+            if hasattr(models_data, 'data'):
+                # Extract from data attribute if present (ModelsResponse)
+                models_list = models_data.data
+            elif isinstance(models_data, dict) and 'data' in models_data:
+                # Extract from data array if dict
                 models_list = models_data['data']
                 # Ensure models_list is actually a list
                 if not isinstance(models_list, list):
@@ -215,7 +218,12 @@ class OpenRouterClient:
                 models_list = []
                 
             for model in models_list:
-                if isinstance(model, dict):
+                if hasattr(model, 'id') and hasattr(model, 'context_length'):
+                    # Handle Pydantic model objects
+                    if model.id and model.context_length:
+                        context_lengths[model.id] = model.context_length
+                elif isinstance(model, dict):
+                    # Handle dict objects
                     model_id = model.get('id')
                     context_length = model.get('context_length', 0)
                     if model_id and context_length:
@@ -292,18 +300,18 @@ class OpenRouterClient:
                 seconds_until_refresh = 3600
             
             # Calculate appropriate rate limits based on remaining credits
-            requests_per_period = max(1, int(remaining_credits / 10))  # Use 10% of credits per period
+            requests = max(1, int(remaining_credits / 10))  # Use 10% of credits per period
             
             # Create rate limit configuration dictionary
             rate_limits = {
-                "requests_per_period": requests_per_period,
-                "seconds_per_period": 60,  # Default to 1 minute periods
+                "requests": requests,
+                "period": 60,  # Default to 1 minute periods
                 "cooldown": seconds_until_refresh if remaining_credits < 10 else 0
             }
             
             # Log the calculated rate limits
             self.logger.info(
-                f"Calculated rate limits: {requests_per_period} requests per minute, "
+                f"Calculated rate limits: {requests} requests per minute, "
                 f"cooldown: {rate_limits['cooldown']} seconds"
             )
             

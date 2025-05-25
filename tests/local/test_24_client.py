@@ -809,22 +809,22 @@ class Test_OpenRouterClient_CalculateRateLimits_01_NominalBehaviors:
         # Sufficient credits
         (
             {"remaining": 1000, "refresh_rate": {"seconds": 3600}}, 
-            {"requests_per_period": 100, "seconds_per_period": 60, "cooldown": 0}
+            {"requests": 100, "period": 60, "cooldown": 0}
         ),
         # Low credits, cooldown active
         (
             {"remaining": 5, "refresh_rate": {"seconds": 1800}}, 
-            {"requests_per_period": 1, "seconds_per_period": 60, "cooldown": 1800}
+            {"requests": 1, "period": 60, "cooldown": 1800}
         ),
         # Minimal credits
         (
             {"remaining": 10, "refresh_rate": {"seconds": 3600}},
-            {"requests_per_period": 1, "seconds_per_period": 60, "cooldown": 0}
+            {"requests": 1, "period": 60, "cooldown": 0}
         ),
         # No refresh_rate info
         (
             {"remaining": 500},
-            {"requests_per_period": 50, "seconds_per_period": 60, "cooldown": 0}
+            {"requests": 50, "period": 60, "cooldown": 0}
         )
     ])
     def test_successfully_process_credit_information_and_generate_rate_limit_configuration(
@@ -850,7 +850,7 @@ class Test_OpenRouterClient_CalculateRateLimits_01_NominalBehaviors:
             client.credits.get.assert_called_once()
             client.logger.info.assert_any_call("Calculating rate limits based on remaining credits")
             client.logger.info.assert_any_call(
-                f"Calculated rate limits: {expected_limits['requests_per_period']} requests per minute, "
+                f"Calculated rate limits: {expected_limits['requests']} requests per minute, "
                 f"cooldown: {expected_limits['cooldown']} seconds"
             )
 
@@ -880,7 +880,7 @@ class Test_OpenRouterClient_CalculateRateLimits_02_NegativeBehaviors:
             
             # Act & Assert
             # Default behavior when response is malformed: assumes 0 credits, 3600s refresh
-            expected_limits = {"requests_per_period": 1, "seconds_per_period": 60, "cooldown": 3600}
+            expected_limits = {"requests": 1, "period": 60, "cooldown": 3600}
             if invalid_response is None or not isinstance(invalid_response, dict):
                 result = client.calculate_rate_limits()
                 assert result == expected_limits
@@ -893,8 +893,8 @@ class Test_OpenRouterClient_CalculateRateLimits_02_NegativeBehaviors:
             else: # Other specific malformed cases
                 result = client.calculate_rate_limits()
                 # Check general structure, as specific values depend on how defaults are handled
-                assert "requests_per_period" in result
-                assert "seconds_per_period" in result
+                assert "requests" in result
+                assert "period" in result
                 assert "cooldown" in result
             
             client.logger.info.assert_any_call("Calculating rate limits based on remaining credits")
@@ -929,9 +929,9 @@ class Test_OpenRouterClient_CalculateRateLimits_03_BoundaryBehaviors:
             result = client.calculate_rate_limits()
             
             # Assert
-            assert result["requests_per_period"] == expected_requests
+            assert result["requests"] == expected_requests
             assert result["cooldown"] == expected_cooldown
-            assert result["seconds_per_period"] == 60
+            assert result["period"] == 60
 
 
 class Test_OpenRouterClient_CalculateRateLimits_04_ErrorHandlingBehaviors:
@@ -997,8 +997,8 @@ class Test_OpenRouterClient_CalculateRateLimits_05_StateTransitionBehaviors:
             final_limits = client.calculate_rate_limits()
             
             # Assert
-            assert initial_limits["requests_per_period"] == expected_initial_req
-            assert final_limits["requests_per_period"] == expected_final_req
+            assert initial_limits["requests"] == expected_initial_req
+            assert final_limits["requests"] == expected_final_req
 
 
 class Test_OpenRouterClient_Close_01_NominalBehaviors:
