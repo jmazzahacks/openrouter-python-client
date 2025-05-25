@@ -8,9 +8,8 @@ Exported:
 - GenerationsEndpoint: Handler for generations endpoint
 """
 
-import logging
-from typing import Dict, List, Optional, Union, Any
-from datetime import datetime, timedelta
+from typing import Optional, Union
+from datetime import datetime
 
 from ..auth import AuthManager
 from ..http import HTTPManager
