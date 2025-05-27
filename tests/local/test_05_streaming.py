@@ -523,9 +523,9 @@ class Test_StreamingCompletionsRequest_ResumeStream_01_NominalBehaviors:
         results = list(request.resume_stream())
         
         # Assert
-        assert http_manager.post.called
+        assert http_manager.client.post.called
         expected_prompt = "Original promptPrevious content"
-        actual_prompt = http_manager.post.call_args[1]["json"]["prompt"]
+        actual_prompt = http_manager.client.post.call_args[1]["json"]["prompt"]
         assert actual_prompt == expected_prompt
         assert len(results) == 1
         assert results == [{"id": "1", "choices": [{"delta": {"content": " continued"}}]}]
