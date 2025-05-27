@@ -12,7 +12,6 @@ Exported:
 - CreditsEndpoint: Handler for credits and payment endpoints
 - GenerationsEndpoint: Handler for generations history endpoints
 - KeysEndpoint: Handler for API keys management
-- WebEndpoint: Handler for web page processing endpoints
 """
 
 from .base import BaseEndpoint
@@ -22,7 +21,6 @@ from .models import ModelsEndpoint
 from .credits import CreditsEndpoint
 from .generations import GenerationsEndpoint
 from .keys import KeysEndpoint
-from .web import WebEndpoint
 
 __all__ = [
     'BaseEndpoint',
@@ -32,5 +30,4 @@ __all__ = [
     'CreditsEndpoint',
     'GenerationsEndpoint',
     'KeysEndpoint',
-    'WebEndpoint',
 ]

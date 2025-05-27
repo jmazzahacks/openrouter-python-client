@@ -14,7 +14,7 @@ from typing import List, Union
 from ..auth import AuthManager
 from ..http import HTTPManager
 from .base import BaseEndpoint
-from ..models.models import ModelData, ModelEndpoint, ModelEndpointsResponse, ModelPricing, ModelsResponse
+from ..models.models import ModelData, ModelEndpointsResponse, ModelPricing, ModelsResponse
 
 
 class ModelsEndpoint(BaseEndpoint):

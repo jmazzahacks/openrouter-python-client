@@ -20,7 +20,6 @@ from .endpoints.models import ModelsEndpoint
 from .endpoints.generations import GenerationsEndpoint
 from .endpoints.credits import CreditsEndpoint
 from .endpoints.keys import KeysEndpoint
-from .endpoints.web import WebEndpoint
 
 
 class OpenRouterClient:
@@ -37,7 +36,6 @@ class OpenRouterClient:
         generations (GenerationsEndpoint): Generation statistics endpoint handler.
         credits (CreditsEndpoint): Credits management endpoint handler.
         keys (KeysEndpoint): API key management endpoint handler.
-        web (WebEndpoint): Web search endpoint handler.
         logger (logging.Logger): Client logger.
     """
 
@@ -158,11 +156,6 @@ class OpenRouterClient:
             http_manager=self.http_manager
         )
         
-        # Create WebEndpoint with auth_manager and http_manager
-        self.web = WebEndpoint(
-            auth_manager=self.auth_manager,
-            http_manager=self.http_manager
-        )
         
         self.logger.debug("All endpoint handlers initialized successfully")
 

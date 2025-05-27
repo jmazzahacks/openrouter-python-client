@@ -18,7 +18,7 @@ def mock_all_endpoints():
         GenerationsEndpoint=Mock(),
         CreditsEndpoint=Mock(),
         KeysEndpoint=Mock(),
-        WebEndpoint=Mock()
+        
     ):
         yield
 
@@ -56,7 +56,7 @@ class Test_OpenRouterClient_Init_01_NominalBehaviors:
             GenerationsEndpoint=Mock(),
             CreditsEndpoint=Mock(),
             KeysEndpoint=Mock(),
-            WebEndpoint=Mock()
+            
         ):
             # Act
             client = OpenRouterClient(
@@ -145,7 +145,7 @@ class Test_OpenRouterClient_Init_03_BoundaryBehaviors:
             GenerationsEndpoint=Mock(),
             CreditsEndpoint=Mock(),
             KeysEndpoint=Mock(),
-            WebEndpoint=Mock()
+            
         ):
             # Act
             client = OpenRouterClient(**boundary_params)
@@ -213,7 +213,7 @@ class Test_OpenRouterClient_Init_05_StateTransitionBehaviors:
         endpoint_mocks = {}
         endpoint_names = [
             'CompletionsEndpoint', 'ChatEndpoint', 'ModelsEndpoint',
-            'GenerationsEndpoint', 'CreditsEndpoint', 'KeysEndpoint', 'WebEndpoint'
+            'GenerationsEndpoint', 'CreditsEndpoint', 'KeysEndpoint'
         ]
         
         for name in endpoint_names:
@@ -235,7 +235,6 @@ class Test_OpenRouterClient_Init_05_StateTransitionBehaviors:
             assert hasattr(client, 'generations')
             assert hasattr(client, 'credits')
             assert hasattr(client, 'keys')
-            assert hasattr(client, 'web')
 
 
 class Test_OpenRouterClient_InitializeEndpoints_01_NominalBehaviors:
@@ -260,7 +259,7 @@ class Test_OpenRouterClient_InitializeEndpoints_01_NominalBehaviors:
         endpoint_instances = {}
         endpoint_names = [
             'CompletionsEndpoint', 'ChatEndpoint', 'ModelsEndpoint',
-            'GenerationsEndpoint', 'CreditsEndpoint', 'KeysEndpoint', 'WebEndpoint'
+            'GenerationsEndpoint', 'CreditsEndpoint', 'KeysEndpoint'
         ]
         
         for name in endpoint_names:
@@ -349,7 +348,7 @@ class Test_OpenRouterClient_InitializeEndpoints_03_BoundaryBehaviors:
         endpoint_mocks = {}
         endpoint_names = [
             'CompletionsEndpoint', 'ChatEndpoint', 'ModelsEndpoint',
-            'GenerationsEndpoint', 'CreditsEndpoint', 'KeysEndpoint', 'WebEndpoint'
+            'GenerationsEndpoint', 'CreditsEndpoint', 'KeysEndpoint'
         ]
         
         for name in endpoint_names:
@@ -371,7 +370,7 @@ class Test_OpenRouterClient_InitializeEndpoints_04_ErrorHandlingBehaviors:
     
     @pytest.mark.parametrize("failing_endpoint", [
         'CompletionsEndpoint', 'ChatEndpoint', 'ModelsEndpoint',
-        'GenerationsEndpoint', 'CreditsEndpoint', 'KeysEndpoint', 'WebEndpoint'
+        'GenerationsEndpoint', 'CreditsEndpoint', 'KeysEndpoint'
     ])
     @patch('openrouter_client.client.AuthManager')
     @patch('openrouter_client.client.HTTPManager')
@@ -388,7 +387,7 @@ class Test_OpenRouterClient_InitializeEndpoints_04_ErrorHandlingBehaviors:
         
         patch_dict = {}
         for endpoint in ['CompletionsEndpoint', 'ChatEndpoint', 'ModelsEndpoint',
-                        'GenerationsEndpoint', 'CreditsEndpoint', 'KeysEndpoint', 'WebEndpoint']:
+                        'GenerationsEndpoint', 'CreditsEndpoint', 'KeysEndpoint', ]:
             if endpoint == failing_endpoint:
                 patch_dict[endpoint] = Mock(side_effect=Exception(f"{endpoint} failed"))
             else:
@@ -423,9 +422,9 @@ class Test_OpenRouterClient_InitializeEndpoints_05_StateTransitionBehaviors:
         endpoint_instances = {}
         endpoint_mocks = {}
         endpoint_attributes = ['completions', 'chat', 'models', 'generations',
-                              'credits', 'keys', 'web']
+                              'credits', 'keys']
         endpoint_classes = ['CompletionsEndpoint', 'ChatEndpoint', 'ModelsEndpoint',
-                           'GenerationsEndpoint', 'CreditsEndpoint', 'KeysEndpoint', 'WebEndpoint']
+                           'GenerationsEndpoint', 'CreditsEndpoint', 'KeysEndpoint']
         
         for cls_name, attr_name in zip(endpoint_classes, endpoint_attributes):
             instance = Mock()
@@ -621,18 +620,18 @@ class Test_OpenRouterClient_RefreshContextLengths_05_StateTransitionBehaviors:
         ({"model1": 2048}, {"data": [{"id": "model1", "context_length": 4096}]}, {"model1": 4096}),
         # Partial update (some valid, some invalid)
         (
-            {"model1": 2048}, 
+            {"model1": 2048},
             {"data": [
                 {"id": "model1", "context_length": 4096},
                 {"id": "model2"},  # Invalid
                 {"id": "model3", "context_length": 8192}
-            ]}, 
+            ]},
             {"model1": 4096, "model3": 8192}
         ),
         # Add to existing
         (
-            {"model1": 2048}, 
-            {"data": [{"id": "model2", "context_length": 4096}]}, 
+            {"model1": 2048},
+            {"data": [{"id": "model2", "context_length": 4096}]},
             {"model1": 2048, "model2": 4096}
         )
     ])
@@ -800,12 +799,12 @@ class Test_OpenRouterClient_CalculateRateLimits_01_NominalBehaviors:
     @pytest.mark.parametrize("credits_response,expected_limits", [
         # Sufficient credits
         (
-            {"remaining": 1000, "refresh_rate": {"seconds": 3600}}, 
+            {"remaining": 1000, "refresh_rate": {"seconds": 3600}},
             {"requests": 100, "period": 60, "cooldown": 0}
         ),
         # Low credits, cooldown active
         (
-            {"remaining": 5, "refresh_rate": {"seconds": 1800}}, 
+            {"remaining": 5, "refresh_rate": {"seconds": 1800}},
             {"requests": 1, "period": 60, "cooldown": 1800}
         ),
         # Minimal credits
@@ -1013,7 +1012,7 @@ class Test_OpenRouterClient_Close_01_NominalBehaviors:
         
         endpoint_names = [
             'CompletionsEndpoint', 'ChatEndpoint', 'ModelsEndpoint',
-            'GenerationsEndpoint', 'CreditsEndpoint', 'KeysEndpoint', 'WebEndpoint'
+            'GenerationsEndpoint', 'CreditsEndpoint', 'KeysEndpoint'
         ]
         endpoint_attributes = [name.lower().replace('endpoint', '') for name in endpoint_names]
 
@@ -1049,9 +1048,9 @@ class Test_OpenRouterClient_Close_02_NegativeBehaviors:
         mock_http_instance = Mock()
         mock_http_manager.return_value = mock_http_instance
 
-        with patch.multiple('openrouter_client.client', CompletionsEndpoint=Mock(), ChatEndpoint=Mock(), ModelsEndpoint=Mock(), 
-                           GenerationsEndpoint=Mock(), CreditsEndpoint=Mock(), 
-                           KeysEndpoint=Mock(), WebEndpoint=Mock()):
+        with patch.multiple('openrouter_client.client', CompletionsEndpoint=Mock(), ChatEndpoint=Mock(), ModelsEndpoint=Mock(),
+                           GenerationsEndpoint=Mock(), CreditsEndpoint=Mock(),
+                           KeysEndpoint=Mock()):
             client = OpenRouterClient(api_key="test")
 
         if scenario == "already_closed":
@@ -1076,7 +1075,7 @@ class Test_OpenRouterClient_Close_02_NegativeBehaviors:
             # The key is no error and endpoints are None.
             pass 
         
-        endpoint_attributes = ['completions', 'generations', 'credits', 'keys', 'web']
+        endpoint_attributes = ['completions', 'generations', 'credits', 'keys']
         if scenario == "missing_endpoints": # chat and models were deleted
             endpoint_attributes.extend(['chat', 'models'])
 
@@ -1157,9 +1156,9 @@ class Test_OpenRouterClient_Close_04_ErrorHandlingBehaviors:
         mock_http_instance.close.side_effect = Exception("HTTP close failed")
         mock_http_manager.return_value = mock_http_instance
 
-        with patch.multiple('openrouter_client.client', CompletionsEndpoint=Mock(), ChatEndpoint=Mock(), ModelsEndpoint=Mock(), 
-                           GenerationsEndpoint=Mock(), CreditsEndpoint=Mock(), 
-                           KeysEndpoint=Mock(), WebEndpoint=Mock()):
+        with patch.multiple('openrouter_client.client', CompletionsEndpoint=Mock(), ChatEndpoint=Mock(), ModelsEndpoint=Mock(),
+                           GenerationsEndpoint=Mock(), CreditsEndpoint=Mock(),
+                           KeysEndpoint=Mock()):
             client = OpenRouterClient(api_key="test")
         
         # Act
@@ -1172,7 +1171,7 @@ class Test_OpenRouterClient_Close_04_ErrorHandlingBehaviors:
         # Ensure that even if http_manager.close fails, endpoints are still nulled
         endpoint_attributes = [
             'completions', 'chat', 'models', 'generations',
-            'credits', 'keys', 'web'
+            'credits', 'keys'
         ]
         for attr in endpoint_attributes:
             assert getattr(client, attr) is None, f"Endpoint {attr} was not nulled"
@@ -1203,11 +1202,11 @@ class Test_OpenRouterClient_Close_05_StateTransitionBehaviors:
         
         endpoint_attributes = [
             'completions', 'chat', 'models', 'generations',
-            'credits', 'keys', 'web'
+            'credits', 'keys'
         ]
         endpoint_classes = [
             'CompletionsEndpoint', 'ChatEndpoint', 'ModelsEndpoint',
-            'GenerationsEndpoint', 'CreditsEndpoint', 'KeysEndpoint', 'WebEndpoint'
+            'GenerationsEndpoint', 'CreditsEndpoint', 'KeysEndpoint'
         ]
 
         with patch.multiple('openrouter_client.client', **{cls: Mock() for cls in endpoint_classes}):
@@ -1241,9 +1240,9 @@ class Test_OpenRouterClient_Enter_01_NominalBehaviors:
     ):
         """Test that __enter__ returns the client instance itself."""
         # Arrange
-        with patch.multiple('openrouter_client.client', CompletionsEndpoint=Mock(), ChatEndpoint=Mock(), ModelsEndpoint=Mock(), 
-                           GenerationsEndpoint=Mock(), CreditsEndpoint=Mock(), 
-                           KeysEndpoint=Mock(), WebEndpoint=Mock()):
+        with patch.multiple('openrouter_client.client', CompletionsEndpoint=Mock(), ChatEndpoint=Mock(), ModelsEndpoint=Mock(),
+                           GenerationsEndpoint=Mock(), CreditsEndpoint=Mock(),
+                           KeysEndpoint=Mock()):
             client_instance = OpenRouterClient(api_key="test")
         
             # Act
@@ -1271,9 +1270,9 @@ class Test_OpenRouterClient_Exit_01_NominalBehaviors:
         mock_http_instance = Mock()
         mock_http_manager.return_value = mock_http_instance
         
-        with patch.multiple('openrouter_client.client', CompletionsEndpoint=Mock(), ChatEndpoint=Mock(), ModelsEndpoint=Mock(), 
-                           GenerationsEndpoint=Mock(), CreditsEndpoint=Mock(), 
-                           KeysEndpoint=Mock(), WebEndpoint=Mock()):
+        with patch.multiple('openrouter_client.client', CompletionsEndpoint=Mock(), ChatEndpoint=Mock(), ModelsEndpoint=Mock(),
+                           GenerationsEndpoint=Mock(), CreditsEndpoint=Mock(),
+                           KeysEndpoint=Mock()):
             client = OpenRouterClient(api_key="test")
         
             # Act
@@ -1311,9 +1310,9 @@ class Test_OpenRouterClient_Exit_02_NegativeBehaviors:
         mock_http_instance = Mock()
         mock_http_manager.return_value = mock_http_instance
         
-        with patch.multiple('openrouter_client.client', CompletionsEndpoint=Mock(), ChatEndpoint=Mock(), ModelsEndpoint=Mock(), 
-                           GenerationsEndpoint=Mock(), CreditsEndpoint=Mock(), 
-                           KeysEndpoint=Mock(), WebEndpoint=Mock()):
+        with patch.multiple('openrouter_client.client', CompletionsEndpoint=Mock(), ChatEndpoint=Mock(), ModelsEndpoint=Mock(),
+                           GenerationsEndpoint=Mock(), CreditsEndpoint=Mock(),
+                           KeysEndpoint=Mock()):
             client = OpenRouterClient(api_key="test")
         
             # Act
@@ -1352,9 +1351,9 @@ class Test_OpenRouterClient_Exit_04_ErrorHandlingBehaviors:
         if exception_in_context:
             exc_type, exc_val, exc_tb = (RuntimeError, RuntimeError("Context error"), Mock())
 
-        with patch.multiple('openrouter_client.client', CompletionsEndpoint=Mock(), ChatEndpoint=Mock(), ModelsEndpoint=Mock(), 
-                           GenerationsEndpoint=Mock(), CreditsEndpoint=Mock(), 
-                           KeysEndpoint=Mock(), WebEndpoint=Mock()):
+        with patch.multiple('openrouter_client.client', CompletionsEndpoint=Mock(), ChatEndpoint=Mock(), ModelsEndpoint=Mock(),
+                           GenerationsEndpoint=Mock(), CreditsEndpoint=Mock(),
+                           KeysEndpoint=Mock()):
             client = OpenRouterClient(api_key="test")
         
             # Act
@@ -1393,11 +1392,11 @@ class Test_OpenRouterClient_Exit_05_StateTransitionBehaviors:
 
         endpoint_attributes = [
             'completions', 'chat', 'models', 'generations',
-            'credits', 'keys', 'web'
+            'credits', 'keys'
         ]
         endpoint_classes = [
             'CompletionsEndpoint', 'ChatEndpoint', 'ModelsEndpoint',
-            'GenerationsEndpoint', 'CreditsEndpoint', 'KeysEndpoint', 'WebEndpoint'
+            'GenerationsEndpoint', 'CreditsEndpoint', 'KeysEndpoint'
         ]
         
         with patch.multiple('openrouter_client.client', **{cls: Mock() for cls in endpoint_classes}):
