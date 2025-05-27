@@ -81,12 +81,32 @@ class ChatEndpoint(BaseEndpoint):
         for chunk in response_iterator:
             try:
                 # Create a copy of the chunk to modify
-                modified_chunk = chunk.copy()
+                if isinstance(chunk, list):
+                    if len(chunk) == 1:
+                        modified_chunk = chunk[0].copy()
+                    elif len(chunk) > 1:
+                        self.logger.warning(f"Multiple choices found in chunk: {chunk}")
+                        modified_chunk = chunk[0].copy()
+                    else:
+                        self.logger.warning(f"No choices found in chunk: {chunk}")
+                        modified_chunk = {}
+                elif isinstance(chunk, dict):
+                    modified_chunk = chunk.copy()
+                else:
+                    raise ValueError(f"Unexpected chunk type: {type(chunk)}")
                 
                 # Parse choices into ChatCompletionStreamResponseChoice objects for validation
                 if 'choices' in chunk:
+                    if isinstance(chunk["choices"], dict):
+                        choices = [chunk["choices"]]
+                    elif isinstance(chunk["choices"], list):
+                        choices = chunk["choices"]
+                    else:
+                        raise ValueError(f"Unexpected choices type: {type(chunk['choices'])}")
+                    
                     parsed_choices = []
-                    for choice_data in chunk['choices']:
+                    
+                    for choice_data in choices:
                         try:
                             modified_choice_data = choice_data.copy()
                             
@@ -103,7 +123,7 @@ class ChatEndpoint(BaseEndpoint):
                             # Parse finish reason
                             if 'delta' in choice_data and choice_data['delta'] is not None:
                                 try:
-                                    parsed_delta = ChatCompletionStreamResponseDelta.model_validate(choice_data['finish_reason'])
+                                    parsed_delta = ChatCompletionStreamResponseDelta.model_validate(choice_data['delta'])
                                     modified_choice_data['delta'] = parsed_delta
                                 except Exception as e:
                                     self.logger.warning(f"Failed to parse streaming delta: {e}")
@@ -340,7 +360,8 @@ class ChatEndpoint(BaseEndpoint):
             max_tokens (Optional[int]): Maximum tokens to generate.
             stop (Optional[Union[str, List[str]]]): Stop sequences to end generation.
             n (Optional[int]): Number of completions to generate.
-            stream (Optional[bool]): Whether to stream responses.
+            stream (Optional[bool]): Whether to stream responses. When True, returns an iterator 
+                that yields response chunks as they arrive.
             presence_penalty (Optional[float]): Penalty for token presence (-2.0 to 2.0).
             frequency_penalty (Optional[float]): Penalty for token frequency (-2.0 to 2.0).
             user (Optional[str]): User identifier for tracking.
@@ -364,6 +385,8 @@ class ChatEndpoint(BaseEndpoint):
         Returns:
             Union[ChatCompletionResponse, Iterator[ChatCompletionStreamResponse]]: Either a parsed 
             response model (non-streaming) or an iterator of parsed response chunks (streaming).
+            When stream=True, the iterator yields chunks immediately as they arrive from the API,
+            without accumulating the entire response first.
             
         Raises:
             APIError: If the API request fails.
@@ -470,20 +493,20 @@ class ChatEndpoint(BaseEndpoint):
             
             # Create streaming request handler
             streamer = StreamingChatCompletionsRequest(
+                http_manager=self.http_manager,
+                auth_manager=self.auth_manager,
                 endpoint=endpoint_url,
                 headers=headers,
                 messages=processed_messages,
                 params=data,  # Use the single data dictionary
                 chunk_size=chunk_size,
                 state_file=state_file,
-                logger=self.logger,
-                client=self.http_manager.client
+                logger=self.logger
             )
             
-            # Start streaming
+            # Return streaming iterator
             try:
-                streamer.start()
-                return self._parse_streaming_response(streamer.get_result())
+                return self._parse_streaming_response(streamer.stream())
             except Exception as e:
                 self.logger.error(f"Streaming chat completions failed: {e}")
                 raise StreamingError(
@@ -524,12 +547,13 @@ class ChatEndpoint(BaseEndpoint):
         """
         # Create streaming request handler with just the state file
         streamer = StreamingChatCompletionsRequest(
+            http_manager=self.http_manager,
+            auth_manager=self.auth_manager,
             endpoint="",   # Will be loaded from state
             headers={},    # Will be loaded from state
             messages=[],   # Will be loaded from state
             state_file=state_file,
-            logger=self.logger,
-            client=self.http_manager.client
+            logger=self.logger
         )
         
         # Resume streaming

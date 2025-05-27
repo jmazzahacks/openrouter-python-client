@@ -42,14 +42,14 @@ from openrouter_client.tools import (
 
 
 # Test helper classes and enums
-class TestEnum(Enum):
+class DummyEnum(Enum):
     """Test enumeration for parameter type inference testing."""
     VALUE_ONE = "value1"
     VALUE_TWO = "value2"
     VALUE_THREE = "value3"
 
 
-class TestPydanticModel(BaseModel):
+class DummyPydanticModel(BaseModel):
     """Test Pydantic model for parameter type inference testing."""
     name: str
     age: int
@@ -58,7 +58,7 @@ class TestPydanticModel(BaseModel):
 
 class NestedTestModel(BaseModel):
     """Nested Pydantic model for complex testing scenarios."""
-    user: TestPydanticModel
+    user: DummyPydanticModel
     metadata: Dict[str, Any]
 
 
@@ -81,8 +81,8 @@ def complex_function(
     text: str,
     items: List[str],
     mapping: Dict[str, int],
-    model: TestPydanticModel,
-    enum_val: TestEnum,
+    model: DummyPydanticModel,
+    enum_val: DummyEnum,
     union_param: Union[str, int],
     optional_list: Optional[List[str]] = None
 ) -> Dict[str, Any]:
@@ -194,7 +194,7 @@ class Test_InferParameterType_01_NominalBehaviors:
     def test_enum_subclass_handling(self):
         """Test proper handling of Enum subclasses returning STRING type."""
         # Arrange
-        input_type = TestEnum
+        input_type = DummyEnum
         
         # Act
         result = infer_parameter_type(input_type)
@@ -205,7 +205,7 @@ class Test_InferParameterType_01_NominalBehaviors:
     def test_pydantic_model_handling(self):
         """Test successful processing of Pydantic BaseModel subclasses returning OBJECT type."""
         # Arrange
-        input_type = TestPydanticModel
+        input_type = DummyPydanticModel
         
         # Act
         result = infer_parameter_type(input_type)
@@ -328,7 +328,7 @@ class Test_InferParameterType_05_StateTransitionBehaviors:
     def test_no_side_effects_on_input(self):
         """Test no side effects or mutations on input type objects."""
         # Arrange
-        original_type = TestEnum
+        original_type = DummyEnum
         original_attrs = dir(original_type)
         
         # Act
@@ -390,7 +390,7 @@ class Test_BuildParameterSchema_01_NominalBehaviors:
         """Test successful extraction and setting of enum values from Enum types."""
         # Arrange
         param_name = "enum_param"
-        param_type = TestEnum
+        param_type = DummyEnum
         
         # Act
         result = build_parameter_schema(param_name, param_type)
@@ -421,7 +421,7 @@ class Test_BuildParameterSchema_01_NominalBehaviors:
         """Test successful integration of Pydantic model schemas for object parameters."""
         # Arrange
         param_name = "model_param"
-        param_type = TestPydanticModel
+        param_type = DummyPydanticModel
         
         # Act
         result = build_parameter_schema(param_name, param_type)
@@ -524,14 +524,14 @@ class Test_BuildParameterSchema_05_StateTransitionBehaviors:
     def test_no_mutation_of_input_types(self):
         """Test no mutation of input type objects or enum classes."""
         # Arrange
-        original_enum = TestEnum
-        original_values = list(TestEnum)
+        original_enum = DummyEnum
+        original_values = list(DummyEnum)
         
         # Act
-        build_parameter_schema("test", TestEnum)
+        build_parameter_schema("test", DummyEnum)
         
         # Assert
-        assert list(TestEnum) == original_values
+        assert list(DummyEnum) == original_values
 
 
 # Test Classes for build_function_parameters

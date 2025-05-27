@@ -25,15 +25,15 @@ class LogProbs(BaseModel):
     Log probabilities for tokens in completions.
     
     Attributes:
-        tokens (List[str]): The tokens that the model used.
-        token_logprobs (List[float]): Log probabilities of the tokens.
+        tokens (Optional[List[str]]): The tokens that the model used.
+        token_logprobs (Optional[List[float]]): Log probabilities of the tokens.
         top_logprobs (Optional[List[Dict[str, float]]]): The most likely tokens for each position.
-        text_offset (List[int]): Character offsets for the tokens in the generated text.
+        text_offset (Optional[List[int]]): Character offsets for the tokens in the generated text.
     """
-    tokens: List[str] = Field(..., description="The tokens that the model used")
-    token_logprobs: List[float] = Field(..., description="Log probabilities of the tokens")
+    tokens: Optional[List[str]] = Field(None, description="The tokens that the model used")
+    token_logprobs: Optional[List[float]] = Field(None, description="Log probabilities of the tokens")
     top_logprobs: Optional[List[Dict[str, float]]] = Field(None, description="The most likely tokens for each position")
-    text_offset: List[int] = Field(..., description="Character offsets for the tokens in the generated text")
+    text_offset: Optional[List[int]] = Field(None, description="Character offsets for the tokens in the generated text")
     
     @model_validator(mode="after")
     def validate_list_lengths(self) -> "LogProbs":
@@ -46,6 +46,10 @@ class LogProbs(BaseModel):
         Returns:
             self: The validated instance.
         """
+        # Skip validation if any of the required fields are None
+        if self.tokens is None or self.token_logprobs is None or self.text_offset is None:
+            return self
+            
         if len(self.tokens) != len(self.token_logprobs):
             raise ValueError("All lists must have the same length")
         if len(self.tokens) != len(self.text_offset):

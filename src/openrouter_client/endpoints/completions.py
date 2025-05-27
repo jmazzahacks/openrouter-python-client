@@ -64,9 +64,13 @@ class CompletionsEndpoint(BaseEndpoint):
                 # Parse choices into CompletionsResponseChoice objects
                 if 'choices' in chunk:
                     parsed_choices = []
-                    for choice_data in chunk['choices']:
+                    for i, choice_data in enumerate(chunk['choices']):
                         try:
                             modified_choice_data = choice_data.copy()
+                            
+                            # Add index if missing
+                            if 'index' not in modified_choice_data:
+                                modified_choice_data['index'] = i
                             
                             # Parse finish reason
                             if 'finish_reason' in choice_data and choice_data['finish_reason'] is not None:
@@ -213,6 +217,7 @@ class CompletionsEndpoint(BaseEndpoint):
               reasoning: Optional[Union[Dict[str, Any], ReasoningConfig]] = None,
               include_reasoning: Optional[bool] = None,
               state_file: Optional[str] = None, chunk_size: int = 8192,
+              include: Optional[Dict[str, bool]] = None,
               validate_request: bool = False,
                **kwargs) -> Union[CompletionsResponse, Iterator[CompletionsStreamResponse]]:
         """
@@ -226,7 +231,8 @@ class CompletionsEndpoint(BaseEndpoint):
             max_tokens (Optional[int]): Maximum tokens to generate.
             stop (Optional[Union[str, List[str]]]): Stop sequences to end generation.
             n (Optional[int]): Number of completions to generate.
-            stream (Optional[bool]): Whether to stream responses.
+            stream (Optional[bool]): Whether to stream responses. When True, returns an iterator 
+                that yields response chunks as they arrive.
             logprobs (Optional[int]): Number of log probabilities to include.
             echo (Optional[bool]): Whether to echo the prompt.
             presence_penalty (Optional[float]): Penalty for token presence (-2.0 to 2.0).
@@ -244,12 +250,16 @@ class CompletionsEndpoint(BaseEndpoint):
                 When True, equivalent to reasoning={}, when False, equivalent to reasoning={'exclude': True}.
             state_file (Optional[str]): File path to save streaming state for resumption.
             chunk_size (int): Size of chunks for streaming responses.
+            include (Optional[Dict[str, bool]]): Fields to include in the response. 
+                Set {"usage": true} to get token usage statistics including cache metrics.
             validate_request (bool): Whether to validate the request using CompletionsRequest model.
             **kwargs: Additional parameters to pass to the API.
             
         Returns:
             Union[CompletionsResponse, Iterator[CompletionsStreamResponse]]: Either a parsed 
             response model (non-streaming) or an iterator of parsed response chunks (streaming).
+            When stream=True, the iterator yields chunks immediately as they arrive from the API,
+            without accumulating the entire response first.
             
         Raises:
             APIError: If the API request fails.
@@ -265,7 +275,7 @@ class CompletionsEndpoint(BaseEndpoint):
                     'frequency_penalty': frequency_penalty, 'user': user, 'functions': functions,
                     'function_call': function_call, 'tools': tools, 'tool_choice': tool_choice,
                     'response_format': response_format, 'reasoning': reasoning,
-                    'include_reasoning': include_reasoning, **kwargs
+                    'include_reasoning': include_reasoning, 'include': include, **kwargs
                 }
                 validated_request = self._create_request_model(prompt, model, **request_params)
                 self.logger.debug("Request validation successful")
@@ -332,6 +342,10 @@ class CompletionsEndpoint(BaseEndpoint):
             # For non-streaming, only add if explicitly provided
             data["stream"] = stream
             
+        # Add include parameter for usage statistics (including cache information)
+        if include is not None:
+            data["include"] = include
+            
         # Add any additional kwargs (for backward compatibility)
         for key, value in kwargs.items():
             # Don't override explicit parameters with kwargs
@@ -349,20 +363,20 @@ class CompletionsEndpoint(BaseEndpoint):
             
             # Create streaming request handler
             streamer = StreamingCompletionsRequest(
+                http_manager=self.http_manager,
+                auth_manager=self.auth_manager,
                 endpoint=endpoint_url,
                 headers=headers,
                 prompt=prompt,
                 params=data,  # Use the single data dictionary
                 chunk_size=chunk_size,
                 state_file=state_file,
-                logger=self.logger,
-                client=self.http_manager.client
+                logger=self.logger
             )
             
-            # Start streaming
+            # Return streaming iterator
             try:
-                streamer.start()
-                return self._parse_streaming_response(streamer.get_result())
+                return self._parse_streaming_response(streamer.stream())
             except Exception as e:
                 self.logger.error(f"Streaming completions failed: {e}")
                 raise StreamingError(
@@ -382,7 +396,23 @@ class CompletionsEndpoint(BaseEndpoint):
             
             # Parse and return CompletionsResponse model
             try:
-                return CompletionsResponse.model_validate(response.json())
+                raw_response = response.json()
+                
+                # Handle case where API returns chat completion format for completions endpoint
+                if 'choices' in raw_response:
+                    for i, choice in enumerate(raw_response['choices']):
+                        # Add missing index field if not present
+                        if 'index' not in choice:
+                            choice['index'] = i
+                        
+                        # Convert new logprobs format to legacy format if needed
+                        if 'logprobs' in choice and isinstance(choice['logprobs'], dict):
+                            if 'content' in choice['logprobs'] and 'refusal' in choice['logprobs']:
+                                # This is the new format, set to None for now
+                                # TODO: Implement proper conversion if needed
+                                choice['logprobs'] = None
+                
+                return CompletionsResponse.model_validate(raw_response)
             except Exception as e:
                 self.logger.warning(f"Failed to parse completions response: {e}")
                 # Fall back to raw response if parsing fails
@@ -403,12 +433,13 @@ class CompletionsEndpoint(BaseEndpoint):
         """
         # Create streaming request handler with just the state file
         streamer = StreamingCompletionsRequest(
+            http_manager=self.http_manager,
+            auth_manager=self.auth_manager,
             endpoint="",  # Will be loaded from state
             headers={},  # Will be loaded from state
             prompt="",   # Will be loaded from state
             state_file=state_file,
-            logger=self.logger,
-            client=self.http_manager.client
+            logger=self.logger
         )
         
         # Resume streaming

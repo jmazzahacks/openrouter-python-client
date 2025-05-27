@@ -155,7 +155,7 @@ class Test_HTTPManager_Request_01_NominalBehaviors:
         mock_client = Mock(spec=SmartSurgeClient)
         mock_response = Mock(spec=requests.Response)
         mock_response.status_code = 200
-        mock_client.request.return_value = (mock_response, [])
+        mock_client.request.return_value = mock_response
         
         return HTTPManager(base_url="https://api.example.com", client=mock_client)
     
@@ -224,7 +224,7 @@ class Test_HTTPManager_Request_02_NegativeBehaviors:
         mock_client = Mock(spec=SmartSurgeClient)
         mock_response = Mock(spec=requests.Response)
         mock_response.status_code = 200
-        mock_client.request.return_value = (mock_response, [])
+        mock_client.request.return_value = mock_response
         
         return HTTPManager(base_url="https://api.example.com", client=mock_client)
     
@@ -263,7 +263,7 @@ class Test_HTTPManager_Request_03_BoundaryBehaviors:
         mock_client = Mock(spec=SmartSurgeClient)
         mock_response = Mock(spec=requests.Response)
         mock_response.status_code = 200
-        mock_client.request.return_value = (mock_response, [])
+        mock_client.request.return_value = mock_response
         
         return HTTPManager(base_url="https://api.example.com", client=mock_client)
     
@@ -309,8 +309,8 @@ class Test_HTTPManager_Request_04_ErrorHandlingBehaviors:
         
         # Setup the mock to return first the redirect, then the success
         mock_client.request.side_effect = [
-            (mock_redirect_response, []),
-            (mock_success_response, [])
+            mock_redirect_response,
+            mock_success_response
         ]
         
         http_manager = HTTPManager(base_url="https://api.example.com", client=mock_client)
@@ -362,7 +362,7 @@ class Test_HTTPManager_Request_04_ErrorHandlingBehaviors:
         if retry_after is not None:
             mock_response.headers["Retry-After"] = retry_after
             
-        mock_client.request.return_value = (mock_response, [])
+        mock_client.request.return_value = mock_response
         
         http_manager = HTTPManager(base_url="https://api.example.com", client=mock_client)
         
@@ -420,7 +420,7 @@ class Test_HTTPManager_Request_04_ErrorHandlingBehaviors:
             mock_response.json.side_effect = ValueError("Invalid JSON")
             mock_response.text = "Error text"
             
-        mock_client.request.return_value = (mock_response, [])
+        mock_client.request.return_value = mock_response
         
         http_manager = HTTPManager(base_url="https://api.example.com", client=mock_client)
         
@@ -455,7 +455,7 @@ class Test_HTTPManager_Request_04_ErrorHandlingBehaviors:
         # Create server error response
         mock_response = Mock(spec=requests.Response)
         mock_response.status_code = status_code
-        mock_client.request.return_value = (mock_response, [])
+        mock_client.request.return_value = mock_response
         
         http_manager = HTTPManager(base_url="https://api.example.com", client=mock_client)
         
@@ -507,7 +507,7 @@ class Test_HTTPManager_Request_05_StateTransitionBehaviors:
         mock_client = Mock(spec=SmartSurgeClient)
         mock_response = Mock(spec=requests.Response)
         mock_response.status_code = 200
-        mock_client.request.return_value = (mock_response, [])
+        mock_client.request.return_value = mock_response
         
         return HTTPManager(base_url="https://api.example.com", client=mock_client)
     

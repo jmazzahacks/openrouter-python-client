@@ -20,8 +20,10 @@ from base64 import b64decode
 
 from pydantic import Field, field_validator, field_serializer
 from smartsurge.streaming import AbstractStreamingRequest, StreamingState as BaseStreamingState
-from smartsurge.client import SmartSurgeClient
 from smartsurge.exceptions import ResumeError, StreamingError
+
+from .http import HTTPManager
+from .auth import AuthManager
 
 
 logger = logging.getLogger(__name__)
@@ -177,7 +179,8 @@ class StreamingCompletionsRequest(AbstractStreamingRequest):
     with support for resumption, state management, and cancellation.
     """
     def __init__(self, 
-                 client: SmartSurgeClient,
+                 http_manager: HTTPManager,
+                 auth_manager: AuthManager,
                  endpoint: str, 
                  headers: Dict[str, str],
                  prompt: str,
@@ -190,7 +193,8 @@ class StreamingCompletionsRequest(AbstractStreamingRequest):
         Initialize a streaming completions request.
         
         Args:
-            client: SmartSurgeClient instance for making requests
+            http_manager: HTTPManager instance for making requests
+            auth_manager: AuthManager instance for authentication
             endpoint: The completions endpoint URL
             headers: HTTP headers for the request
             prompt: The text prompt to complete
@@ -199,10 +203,9 @@ class StreamingCompletionsRequest(AbstractStreamingRequest):
             state_file: File to save state for resumption
             logger: Optional custom logger to use
             request_id: Optional request ID for tracking and correlation
-            client: SmartSurgeClient instance for making requests
         """
-        super().__init__(endpoint, headers, chunk_size, state_file, logger, request_id)
-        self.client = client
+        self.http_manager = http_manager
+        self.auth_manager = auth_manager
         self.prompt = prompt
         self.params = params or {}
         self.completions = []
@@ -211,6 +214,14 @@ class StreamingCompletionsRequest(AbstractStreamingRequest):
         
         # Ensure stream is set to True
         self.params['stream'] = True
+        
+        # Build the data that will be used for the request
+        data = {
+            'prompt': self.prompt,
+            **self.params
+        }
+        
+        super().__init__(endpoint, headers, params=params, data=data, chunk_size=chunk_size, state_file=state_file, logger=logger, request_id=request_id)
         
     def stream(self) -> Iterator[List[Dict[str, Any]]]:
         """
@@ -236,8 +247,8 @@ class StreamingCompletionsRequest(AbstractStreamingRequest):
         self._cancelled = False
         
         try:
-            # Make the request with stream=True using SmartSurgeClient
-            self._response, history = self.client.post(
+            # Make the request with stream=True using HTTPManager's client
+            self._response = self.http_manager.client.post(
                 self.endpoint,
                 headers=self.headers,
                 json=data,
@@ -339,43 +350,81 @@ class StreamingCompletionsRequest(AbstractStreamingRequest):
         
         # Extract state information
         self.endpoint = state.endpoint
-        self.headers = state.headers.copy()  # Create a copy to avoid modifying the original
+        # Use fresh authentication headers from auth_manager
+        self.headers = self.auth_manager.get_auth_headers()
         data = state.data
         
         # Ensure we get data to rebuild our request
         if not data:
             raise ResumeError("State does not contain request data", state_file=self.state_file)
-            
-        # Extract the accumulated completion text from the saved completions
+        
+        # Extract accumulated response from the raw accumulated_data
         accumulated_text = ""
-        for completion_data in self.completions:
-            if 'choices' in completion_data and completion_data['choices']:
-                if completion_data['choices'] and 'delta' in completion_data['choices'][0]:
-                    accumulated_text += completion_data['choices'][0]['delta'].get('content', '')
-                elif completion_data['choices'] and 'text' in completion_data['choices'][0]:
-                    accumulated_text += completion_data['choices'][0]['text']
-                elif completion_data['choices'] and 'content' in completion_data['choices'][0]:
-                    accumulated_text += completion_data['choices'][0]['message'].get('content', '')
+        if hasattr(state, 'accumulated_data') and state.accumulated_data:
+            try:
+                # Convert accumulated_data to string - it might be bytes or already decoded
+                if isinstance(state.accumulated_data, bytes):
+                    raw_data = state.accumulated_data.decode('utf-8')
+                else:
+                    raw_data = str(state.accumulated_data)
+                
+                # Process the SSE format data
+                for line in raw_data.splitlines():
+                    if line.startswith("data: ") and line != "data: [DONE]":
+                        try:
+                            # Extract JSON from the data line
+                            json_str = line[6:]  # Skip 'data: '
+                            chunk_data = json.loads(json_str)
+                            
+                            # Extract content from the chunk
+                            if 'choices' in chunk_data and chunk_data['choices']:
+                                choice = chunk_data['choices'][0]
+                                if 'text' in choice:
+                                    accumulated_text += choice['text'] or ''
+                                elif 'delta' in choice and 'content' in choice['delta']:
+                                    accumulated_text += choice['delta']['content'] or ''
+                                elif 'message' in choice and 'content' in choice['message']:
+                                    accumulated_text += choice['message']['content'] or ''
+                        except json.JSONDecodeError:
+                            self.logger.warning(f"[{self.request_id}] Failed to parse JSON from line: {line}")
+                            continue
+            except Exception as e:
+                self.logger.error(f"[{self.request_id}] Error extracting accumulated text: {e}")
+                # Fall back to empty accumulated text
+                accumulated_text = ""
         
         self.logger.debug(f"[{self.request_id}] Accumulated text: {accumulated_text}")
         
+        # Extract the original prompt from the saved data
+        original_prompt = data.get('prompt', '')
+        
         # Create a new prompt by concatenating the original prompt with the accumulated text
-        new_prompt = self.prompt + accumulated_text
+        new_prompt = original_prompt + accumulated_text
         
         # Build the new request data with the concatenated prompt
-        new_data = {
-            'prompt': new_prompt,
-            **self.params
-        }
+        # Use the saved data but update the prompt
+        new_data = data.copy()
+        new_data['prompt'] = new_prompt
         
         buffer = b""
         self._response = None
         self._cancelled = False
         
         try:
-            # Make a new request with stream=True using SmartSurgeClient
-            self._response, history = self.client.post(
-                endpoint=self.endpoint,
+            # Make a new request with stream=True using HTTPManager's client
+            # Extract the endpoint path from the full URL
+            endpoint_path = self.endpoint
+            if endpoint_path.startswith('http'):
+                # Parse out just the path portion
+                from urllib.parse import urlparse
+                parsed = urlparse(endpoint_path)
+                endpoint_path = parsed.path
+                # Remove the base path (e.g., "/api/v1/") if it's included
+                if '/api/v1/' in endpoint_path:
+                    endpoint_path = endpoint_path.split('/api/v1/')[-1]
+            
+            self._response = self.http_manager.client.post(
+                self.endpoint,
                 headers=self.headers,
                 json=new_data,
                 stream=True
@@ -494,11 +543,13 @@ class StreamingCompletionsRequest(AbstractStreamingRequest):
                                     if 'text' in choice:
                                         self.logger.debug(f"[{self.request_id}] Received text: {choice['text']}")
                                     if "message" in choice:
-                                        self.logger.debug(f"[{self.request_id}] Received content: {choice['message']['content']}")
-                                        if "reasoning" in choice["delta"]:
+                                        if "content" in choice["message"]:
+                                            self.logger.debug(f"[{self.request_id}] Received content: {choice['message']['content']}")
+                                        if "reasoning" in choice["message"]:
                                             self.logger.debug(f"[{self.request_id}] Received reasoning: {choice['message']['reasoning']}")
                                     if "delta" in choice:
-                                        self.logger.debug(f"[{self.request_id}] Received content: {choice['delta']['content']}")
+                                        if "content" in choice["delta"]:
+                                            self.logger.debug(f"[{self.request_id}] Received content: {choice['delta']['content']}")
                                         if "reasoning" in choice["delta"]:
                                             self.logger.debug(f"[{self.request_id}] Received reasoning: {choice['delta']['reasoning']}")
                     except json.JSONDecodeError:
@@ -560,10 +611,12 @@ class StreamingChatCompletionsRequest(AbstractStreamingRequest):
     with support for resumption, state management, and cancellation.
     """
     def __init__(self, 
-                 client: SmartSurgeClient,
+                 http_manager: HTTPManager,
+                 auth_manager: AuthManager,
                  endpoint: str, 
                  headers: Dict[str, str],
                  messages: List[Dict[str, Any]],
+                 data: Optional[Dict[str, Any]] = None,
                  params: Optional[Dict[str, Any]] = None,
                  chunk_size: int = 8192,
                  state_file: Optional[str] = None,
@@ -573,21 +626,24 @@ class StreamingChatCompletionsRequest(AbstractStreamingRequest):
         Initialize a streaming chat completions request.
         
         Args:
-            client: SmartSurgeClient instance for making requests
+            http_manager: HTTPManager instance for making requests
+            auth_manager: AuthManager instance for authentication
             endpoint: The chat completions endpoint URL
             headers: HTTP headers for the request
             messages: The conversation messages
             params: Additional parameters for the chat completions request
+            data: Optional data for the chat completions request
             chunk_size: Size of chunks to process
             state_file: File to save state for resumption
             logger: Optional custom logger to use
             request_id: Optional request ID for tracking and correlation
-            client: SmartSurgeClient instance for making requests
         """
-        super().__init__(endpoint, headers, chunk_size, state_file, logger, request_id)
-        self.client = client
+        super().__init__(endpoint, headers, params=params, data=data, chunk_size=chunk_size, state_file=state_file, logger=logger, request_id=request_id)
+        self.http_manager = http_manager
+        self.auth_manager = auth_manager
         self.messages = messages
         self.params = params or {}
+        self.data = data or {}
         self.completions = []
         self._cancelled = False
         self._response = None
@@ -619,8 +675,8 @@ class StreamingChatCompletionsRequest(AbstractStreamingRequest):
         self._cancelled = False
         
         try:
-            # Make the request with stream=True using SmartSurgeClient
-            self._response, history = self.client.post(
+            # Make the request with stream=True using HTTPManager's client
+            self._response = self.http_manager.client.post(
                 self.endpoint,
                 headers=self.headers,
                 json=data,
@@ -724,21 +780,47 @@ class StreamingChatCompletionsRequest(AbstractStreamingRequest):
         
         # Extract state information
         self.endpoint = state.endpoint
-        self.headers = state.headers.copy()  # Create a copy to avoid modifying the original
-        data = state.data
+        self.params = state.params
         
-        # Ensure we get data to rebuild our request
-        if not data:
-            raise ResumeError("State does not contain request data", state_file=self.state_file)
-            
-        # Extract the accumulated chat completion content from the saved completions
+        # Use fresh authentication headers from auth_manager
+        self.headers = self.auth_manager.get_auth_headers()
+        
+        # Extract accumulated response from the raw accumulated_data
         accumulated_text = ""
-        for completion_data in self.completions:
-            if 'choices' in completion_data and completion_data['choices']:
-                if completion_data['choices'] and 'delta' in completion_data['choices'][0]:
-                    accumulated_text += completion_data['choices'][0]['delta'].get('content', '')
-                elif completion_data['choices'] and 'message' in completion_data['choices'][0]:
-                    accumulated_text += completion_data['choices'][0]['message'].get('content', '')
+        if hasattr(state, 'accumulated_data') and state.accumulated_data:
+            try:
+                # Convert accumulated_data to string - it might be bytes or already decoded
+                if isinstance(state.accumulated_data, bytes):
+                    raw_data = state.accumulated_data.decode('utf-8')
+                else:
+                    raw_data = str(state.accumulated_data)
+                
+                # Process the SSE format data
+                for line in raw_data.split("\n\n"):
+                    if line.startswith("data: ") and line != "data: [DONE]":
+                        try:
+                            # Extract JSON from the data line
+                            json_str = line[6:]  # Skip 'data: '
+                            try:
+                                chunk_data = json.loads(json_str)
+                            except json.JSONDecodeError:
+                                self.logger.warning(f"Incomplete or invalid JSON: {json_str}")
+                                continue
+                            
+                            # Extract content from the chunk
+                            if 'choices' in chunk_data and chunk_data['choices']:
+                                choice = chunk_data['choices'][0]
+                                if 'delta' in choice and 'content' in choice['delta']:
+                                    accumulated_text += choice['delta']['content'] or ''
+                                elif 'message' in choice and 'content' in choice['message']:
+                                    accumulated_text += choice['message']['content'] or ''
+                        except json.JSONDecodeError:
+                            self.logger.warning(f"[{self.request_id}] Failed to parse JSON from line: {line}")
+                            continue
+            except Exception as e:
+                self.logger.error(f"[{self.request_id}] Error extracting accumulated text: {e}")
+                # Fall back to empty accumulated text
+                accumulated_text = ""
         
         self.logger.debug(f"[{self.request_id}] Accumulated text: {accumulated_text}")
         
@@ -758,8 +840,8 @@ class StreamingChatCompletionsRequest(AbstractStreamingRequest):
         self._cancelled = False
         
         try:
-            # Make a new request with stream=True using SmartSurgeClient
-            self._response, history = self.client.post(
+            # Make a new request with stream=True using HTTPManager's client
+            self._response = self.http_manager.client.post(
                 endpoint=self.endpoint,
                 headers=self.headers,
                 json=new_data,

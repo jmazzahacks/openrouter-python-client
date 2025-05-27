@@ -145,21 +145,24 @@ class Test_StreamingCompletionsRequest_Init_01_NominalBehaviors:
     def test_initialization_with_api_parameters(self):
         """Test initialization with API parameters."""
         # Arrange
-        client = MagicMock(spec=SmartSurgeClient)
+        http_manager = MagicMock()
+        auth_manager = MagicMock()
         endpoint = "/v1/completions"
         headers = {"Authorization": "Bearer test_token"}
         prompt = "Hello, world!"
         
         # Act
         request = StreamingCompletionsRequest(
-            client=client,
+            http_manager=http_manager,
+            auth_manager=auth_manager,
             endpoint=endpoint,
             headers=headers,
             prompt=prompt
         )
         
         # Assert
-        assert request.client == client
+        assert request.http_manager == http_manager
+        assert request.auth_manager == auth_manager
         assert request.endpoint == endpoint
         assert request.headers == headers
         assert request.prompt == prompt
@@ -174,11 +177,13 @@ class Test_StreamingCompletionsRequest_Init_05_StateTransitionBehaviors:
     def test_setting_stream_true(self):
         """Test that stream parameter is always set to True regardless of input."""
         # Arrange
-        client = MagicMock(spec=SmartSurgeClient)
+        http_manager = MagicMock()
+        auth_manager = MagicMock()
         
         # Act - Case 1: params is None
         request1 = StreamingCompletionsRequest(
-            client=client,
+            http_manager=http_manager,
+            auth_manager=auth_manager,
             endpoint="/v1/completions",
             headers={},
             prompt="Test"
@@ -186,7 +191,8 @@ class Test_StreamingCompletionsRequest_Init_05_StateTransitionBehaviors:
         
         # Case 2: params with stream=False
         request2 = StreamingCompletionsRequest(
-            client=client,
+            http_manager=http_manager,
+            auth_manager=auth_manager,
             endpoint="/v1/completions",
             headers={},
             prompt="Test",
@@ -203,7 +209,8 @@ class Test_StreamingCompletionsRequest_Stream_01_NominalBehaviors:
     def test_making_streaming_request_and_processing_chunks(self):
         """Test making a streaming request and processing chunks."""
         # Arrange
-        client = MagicMock(spec=SmartSurgeClient)
+        http_manager = MagicMock()
+        auth_manager = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
         
@@ -214,10 +221,11 @@ class Test_StreamingCompletionsRequest_Stream_01_NominalBehaviors:
             b'data: [DONE]\n\n'
         ]
         mock_response.iter_content.return_value = chunks
-        client.post.return_value = (mock_response, {})
+        http_manager.client.post.return_value = mock_response
         
         request = StreamingCompletionsRequest(
-            client=client,
+            http_manager=http_manager,
+            auth_manager=auth_manager,
             endpoint="/v1/completions",
             headers={"Authorization": "Bearer test_token"},
             prompt="Complete this: Hello"
@@ -234,8 +242,8 @@ class Test_StreamingCompletionsRequest_Stream_01_NominalBehaviors:
         results = list(request.stream())
         
         # Assert
-        assert client.post.called
-        client.post.assert_called_with(
+        assert http_manager.client.post.called
+        http_manager.client.post.assert_called_with(
             "/v1/completions",
             headers={"Authorization": "Bearer test_token"},
             json={"prompt": "Complete this: Hello", "stream": True},
@@ -254,14 +262,16 @@ class Test_StreamingCompletionsRequest_Stream_04_ErrorHandlingBehaviors:
     def test_handling_network_and_api_errors(self):
         """Test handling of network and API errors."""
         # Arrange
-        client = MagicMock(spec=SmartSurgeClient)
+        http_manager = MagicMock()
+        auth_manager = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 400
         mock_response.text = "Bad Request"
-        client.post.return_value = (mock_response, {})
+        http_manager.client.post.return_value = mock_response
         
         request = StreamingCompletionsRequest(
-            client=client,
+            http_manager=http_manager,
+            auth_manager=auth_manager,
             endpoint="/v1/completions",
             headers={"Authorization": "Bearer test_token"},
             prompt="Complete this: Hello"
@@ -279,16 +289,18 @@ class Test_StreamingCompletionsRequest_Stream_05_StateTransitionBehaviors:
     def test_updating_position_and_accumulated_data(self):
         """Test updating of position and accumulated data during streaming."""
         # Arrange
-        client = MagicMock(spec=SmartSurgeClient)
+        http_manager = MagicMock()
+        auth_manager = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
         
         chunk = b'data: {"id": "1", "choices": [{"delta": {"content": "Hello"}}]}\n\n'
         mock_response.iter_content.return_value = [chunk]
-        client.post.return_value = (mock_response, {})
+        http_manager.client.post.return_value = mock_response
         
         request = StreamingCompletionsRequest(
-            client=client,
+            http_manager=http_manager,
+            auth_manager=auth_manager,
             endpoint="/v1/completions",
             headers={},
             prompt="Test"
@@ -313,7 +325,8 @@ class Test_StreamingCompletionsRequest_Stream_02_NegativeBehaviors:
     def test_checking_cancellation_status(self):
         """Test that streaming stops when cancellation is requested."""
         # Arrange
-        client = MagicMock(spec=SmartSurgeClient)
+        http_manager = MagicMock()
+        auth_manager = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
         
@@ -323,10 +336,11 @@ class Test_StreamingCompletionsRequest_Stream_02_NegativeBehaviors:
             b'data: {"id": "1", "choices": [{"delta": {"content": " world"}}]}\n\n'
         ]
         mock_response.iter_content.return_value = chunks
-        client.post.return_value = (mock_response, {})
+        http_manager.client.post.return_value = mock_response
         
         request = StreamingCompletionsRequest(
-            client=client,
+            http_manager=http_manager,
+            auth_manager=auth_manager,
             endpoint="/v1/completions",
             headers={},
             prompt="Test"
@@ -353,9 +367,11 @@ class Test_StreamingCompletionsRequest_ProcessChunk_01_NominalBehaviors:
     def test_parsing_sse_format_and_extracting_json(self):
         """Test parsing of SSE format and extraction of JSON data."""
         # Arrange
-        client = MagicMock(spec=SmartSurgeClient)
+        http_manager = MagicMock()
+        auth_manager = MagicMock()
         request = StreamingCompletionsRequest(
-            client=client,
+            http_manager=http_manager,
+            auth_manager=auth_manager,
             endpoint="/v1/completions",
             headers={},
             prompt="Test"
@@ -385,9 +401,11 @@ class Test_StreamingCompletionsRequest_ProcessChunk_04_ErrorHandlingBehaviors:
     def test_handling_invalid_json_and_encoding_issues(self, chunk, expected_results):
         """Test handling of invalid JSON and encoding issues in chunks."""
         # Arrange
-        client = MagicMock(spec=SmartSurgeClient)
+        http_manager = MagicMock()
+        auth_manager = MagicMock()
         request = StreamingCompletionsRequest(
-            client=client,
+            http_manager=http_manager,
+            auth_manager=auth_manager,
             endpoint="/v1/completions",
             headers={},
             prompt="Test"
@@ -408,9 +426,11 @@ class Test_StreamingCompletionsRequest_Cancel_01_NominalBehaviors:
     def test_closing_underlying_connection(self):
         """Test closing of underlying connection when cancelling."""
         # Arrange
-        client = MagicMock(spec=SmartSurgeClient)
+        http_manager = MagicMock()
+        auth_manager = MagicMock()
         request = StreamingCompletionsRequest(
-            client=client,
+            http_manager=http_manager,
+            auth_manager=auth_manager,
             endpoint="/v1/completions",
             headers={},
             prompt="Test"
@@ -433,9 +453,11 @@ class Test_StreamingCompletionsRequest_Cancel_05_StateTransitionBehaviors:
     def test_setting_cancelled_flag(self):
         """Test that cancelled flag is set appropriately."""
         # Arrange
-        client = MagicMock(spec=SmartSurgeClient)
+        http_manager = MagicMock()
+        auth_manager = MagicMock()
         request = StreamingCompletionsRequest(
-            client=client,
+            http_manager=http_manager,
+            auth_manager=auth_manager,
             endpoint="/v1/completions",
             headers={},
             prompt="Test"
@@ -454,14 +476,16 @@ class Test_StreamingCompletionsRequest_ResumeStream_01_NominalBehaviors:
     def test_reconstructing_request_with_accumulated_data(self):
         """Test reconstruction of request with accumulated data for resumption."""
         # Arrange
-        client = MagicMock(spec=SmartSurgeClient)
+        http_manager = MagicMock()
+        auth_manager = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.iter_content.return_value = [b'data: {"id": "1", "choices": [{"delta": {"content": " continued"}}]}\n\n']
-        client.post.return_value = (mock_response, {})
+        http_manager.client.post.return_value = mock_response
         
         request = StreamingCompletionsRequest(
-            client=client,
+            http_manager=http_manager,
+            auth_manager=auth_manager,
             endpoint="/v1/completions",
             headers={"Authorization": "Bearer test_token"},
             prompt="Original prompt",
@@ -474,23 +498,34 @@ class Test_StreamingCompletionsRequest_ResumeStream_01_NominalBehaviors:
             {"choices": [{"delta": {"content": "content"}}]}
         ]
         
+        # Set accumulated_data to simulate previous SSE responses
+        accumulated_sse_data = (
+            b'data: {"id": "1", "choices": [{"delta": {"content": "Previous "}}]}\n\n'
+            b'data: {"id": "1", "choices": [{"delta": {"content": "content"}}]}\n\n'
+        )
+        request.accumulated_data = bytearray(accumulated_sse_data)
+        
         # Mock load_state to return test state
         mock_state = MagicMock()
         mock_state.endpoint = "/v1/completions"
         mock_state.headers = {"Authorization": "Bearer test_token"}
         mock_state.data = {"prompt": "Original prompt"}
+        mock_state.accumulated_data = accumulated_sse_data
         request.load_state = MagicMock(return_value=mock_state)
         
         # Mock process_chunk
         request.process_chunk = MagicMock(return_value=[{"id": "1", "choices": [{"delta": {"content": " continued"}}]}])
         
+        # Mock http_manager.post to return the response
+        http_manager.post.return_value = mock_response
+        
         # Act
         results = list(request.resume_stream())
         
         # Assert
-        assert client.post.called
+        assert http_manager.post.called
         expected_prompt = "Original promptPrevious content"
-        actual_prompt = client.post.call_args[1]["json"]["prompt"]
+        actual_prompt = http_manager.post.call_args[1]["json"]["prompt"]
         assert actual_prompt == expected_prompt
         assert len(results) == 1
         assert results == [{"id": "1", "choices": [{"delta": {"content": " continued"}}]}]
@@ -505,9 +540,11 @@ class Test_StreamingCompletionsRequest_ResumeStream_04_ErrorHandlingBehaviors:
     def test_validating_state_integrity(self, state_scenario, error_msg):
         """Test validation of state integrity during resumption."""
         # Arrange
-        client = MagicMock(spec=SmartSurgeClient)
+        http_manager = MagicMock()
+        auth_manager = MagicMock()
         request = StreamingCompletionsRequest(
-            client=client,
+            http_manager=http_manager,
+            auth_manager=auth_manager,
             endpoint="/v1/completions",
             headers={},
             prompt="Test",
@@ -529,9 +566,11 @@ class Test_StreamingCompletionsRequest_GetResult_01_NominalBehaviors:
     def test_returning_accumulated_completions(self):
         """Test returning of accumulated completions."""
         # Arrange
-        client = MagicMock(spec=SmartSurgeClient)
+        http_manager = MagicMock()
+        auth_manager = MagicMock()
         request = StreamingCompletionsRequest(
-            client=client,
+            http_manager=http_manager,
+            auth_manager=auth_manager,
             endpoint="/v1/completions",
             headers={},
             prompt="Test"
@@ -557,7 +596,8 @@ class Test_StreamingChatCompletionsRequest_Init_01_NominalBehaviors:
     def test_initialization_with_chat_messages(self):
         """Test initialization with chat messages."""
         # Arrange
-        client = MagicMock(spec=SmartSurgeClient)
+        http_manager = MagicMock()
+        auth_manager = MagicMock()
         endpoint = "/v1/chat/completions"
         headers = {"Authorization": "Bearer test_token"}
         messages = [
@@ -567,14 +607,16 @@ class Test_StreamingChatCompletionsRequest_Init_01_NominalBehaviors:
         
         # Act
         request = StreamingChatCompletionsRequest(
-            client=client,
+            http_manager=http_manager,
+            auth_manager=auth_manager,
             endpoint=endpoint,
             headers=headers,
             messages=messages
         )
         
         # Assert
-        assert request.client == client
+        assert request.http_manager == http_manager
+        assert request.auth_manager == auth_manager
         assert request.endpoint == endpoint
         assert request.headers == headers
         assert request.messages == messages
@@ -589,11 +631,13 @@ class Test_StreamingChatCompletionsRequest_ResumeStream_01_NominalBehaviors:
     def test_appending_accumulated_response_to_message_history(self):
         """Test appending accumulated response to message history for resumption."""
         # Arrange
-        client = MagicMock(spec=SmartSurgeClient)
+        http_manager = MagicMock()
+        auth_manager = MagicMock()
+        auth_manager.get_auth_headers.return_value = {"Authorization": "Bearer test_token"}
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.iter_content.return_value = [b'data: {"id": "1", "choices": [{"delta": {"content": " continued"}}]}\n\n']
-        client.post.return_value = (mock_response, {})
+        http_manager.client.post.return_value = mock_response
         
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
@@ -601,7 +645,8 @@ class Test_StreamingChatCompletionsRequest_ResumeStream_01_NominalBehaviors:
         ]
         
         request = StreamingChatCompletionsRequest(
-            client=client,
+            http_manager=http_manager,
+            auth_manager=auth_manager,
             endpoint="/v1/chat/completions",
             headers={"Authorization": "Bearer test_token"},
             messages=messages,
@@ -614,11 +659,20 @@ class Test_StreamingChatCompletionsRequest_ResumeStream_01_NominalBehaviors:
             {"choices": [{"delta": {"content": "a time"}}]}
         ]
         
-        # Mock load_state to return test state
+        # Set accumulated_data to simulate previous SSE responses
+        accumulated_sse_data = (
+            b'data: {"id": "1", "choices": [{"delta": {"content": "Once upon "}}]}\n\n'
+            b'data: {"id": "1", "choices": [{"delta": {"content": "a time"}}]}\n\n'
+        )
+        request.accumulated_data = bytearray(accumulated_sse_data)
+        
+        # Mock load_state to return test state with proper params dictionary
         mock_state = MagicMock()
         mock_state.endpoint = "/v1/chat/completions"
         mock_state.headers = {"Authorization": "Bearer test_token"}
         mock_state.data = {"messages": messages}
+        mock_state.accumulated_data = accumulated_sse_data
+        mock_state.params = {"stream": True}  # Use a proper dictionary instead of MagicMock
         request.load_state = MagicMock(return_value=mock_state)
         
         # Mock process_chunk
@@ -628,8 +682,9 @@ class Test_StreamingChatCompletionsRequest_ResumeStream_01_NominalBehaviors:
         results = list(request.resume_stream())
         
         # Assert
-        assert client.post.called
-        posted_messages = client.post.call_args[1]["json"]["messages"]
+        assert http_manager.client.post.called
+        posted_json = http_manager.client.post.call_args[1]["json"]
+        posted_messages = posted_json["messages"]
         assert len(posted_messages) == 3  # Original 2 + assistant response
         assert posted_messages[2]["role"] == "assistant"
         assert posted_messages[2]["content"] == "Once upon a time"
@@ -639,16 +694,19 @@ class Test_StreamingChatCompletionsRequest_ResumeStream_01_NominalBehaviors:
 class Test_StreamingChatCompletionsRequest_ResumeStream_04_ErrorHandlingBehaviors:
     """Test error handling behaviors of the StreamingChatCompletionsRequest.resume_stream method."""
     
-    @pytest.mark.parametrize("state_scenario,error_msg", [
-        (None, "No state file found or state loading failed"),
-        (MagicMock(data=None), "State does not contain request data"),
+    @pytest.mark.parametrize("state_scenario,error_msg,expected_exception", [
+        (None, "No state file found or state loading failed", ResumeError),
+        (MagicMock(endpoint="/v1/chat/completions", params=None, accumulated_data=b""), "'NoneType' object is not a mapping", TypeError),
     ])
-    def test_handling_missing_or_corrupted_state_data(self, state_scenario, error_msg):
+    def test_handling_missing_or_corrupted_state_data(self, state_scenario, error_msg, expected_exception):
         """Test handling of missing or corrupted state data during resumption."""
         # Arrange
-        client = MagicMock(spec=SmartSurgeClient)
+        http_manager = MagicMock()
+        auth_manager = MagicMock()
+        auth_manager.get_auth_headers.return_value = {"Authorization": "Bearer test_token"}
         request = StreamingChatCompletionsRequest(
-            client=client,
+            http_manager=http_manager,
+            auth_manager=auth_manager,
             endpoint="/v1/chat/completions",
             headers={},
             messages=[{"role": "user", "content": "Hello"}],
@@ -659,7 +717,7 @@ class Test_StreamingChatCompletionsRequest_ResumeStream_04_ErrorHandlingBehavior
         request.load_state = MagicMock(return_value=state_scenario)
         
         # Act & Assert
-        with pytest.raises(ResumeError) as exc_info:
+        with pytest.raises(expected_exception) as exc_info:
             list(request.resume_stream())
         
         assert error_msg in str(exc_info.value)
@@ -680,9 +738,11 @@ class Test_StreamingChatCompletionsRequest_ProcessChunk_01_NominalBehaviors:
     def test_processing_delta_and_message_content_formats(self, chunk, expected):
         """Test processing of both delta and message content formats in chat completions."""
         # Arrange
-        client = MagicMock(spec=SmartSurgeClient)
+        http_manager = MagicMock()
+        auth_manager = MagicMock()
         request = StreamingChatCompletionsRequest(
-            client=client,
+            http_manager=http_manager,
+            auth_manager=auth_manager,
             endpoint="/v1/chat/completions",
             headers={},
             messages=[{"role": "user", "content": "Hello"}]

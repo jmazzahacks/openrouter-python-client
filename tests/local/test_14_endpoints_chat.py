@@ -826,7 +826,7 @@ class Test_ChatEndpoint_Create_04_ErrorHandlingBehaviors:
         with patch('openrouter_client.endpoints.chat.StreamingChatCompletionsRequest') as mock_streamer:
             mock_instance = Mock()
             mock_streamer.return_value = mock_instance
-            mock_instance.start.side_effect = Exception("Streaming failed")
+            mock_instance.stream.side_effect = Exception("Streaming failed")
             mock_instance.position = 0
             
             with pytest.raises(StreamingError) as exc_info:
@@ -1035,12 +1035,13 @@ class Test_ChatEndpoint_ResumeStream_04_ErrorHandlingBehaviors:
         
         # Verify the streaming request was called correctly
         mock_streamer_class.assert_called_once_with(
+            http_manager=endpoint.http_manager,
+            auth_manager=endpoint.auth_manager,
             endpoint="",
             headers={},
             messages=[],
             state_file=state_file,
-            logger=endpoint.logger,
-            client=endpoint.http_manager.client
+            logger=endpoint.logger
         )
         mock_instance.resume.assert_called_once()
 

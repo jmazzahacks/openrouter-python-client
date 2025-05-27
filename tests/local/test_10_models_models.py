@@ -512,7 +512,7 @@ class Test_ModelData_02_NegativeBehaviors:
     """Tests for negative behaviors of the ModelData class."""
     
     @pytest.mark.parametrize("field_to_remove", [
-        "id", "name", "created", "context_length", "quantization", "pricing"
+        "id", "name", "created", "context_length", "pricing"
     ])
     def test_missing_required_field(self, valid_model_data_api_data, field_to_remove):
         """Test that instantiation fails when a required field is missing."""

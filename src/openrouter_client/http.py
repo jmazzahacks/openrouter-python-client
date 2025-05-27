@@ -160,7 +160,7 @@ class HTTPManager:
         
         try:
             try:
-                response, history = self.client.request(
+                response = self.client.request(
                     method=method.value,
                     endpoint=url,
                     headers=headers,
@@ -189,9 +189,9 @@ class HTTPManager:
                     # Handle redirects by retrying with allow_redirects=True
                     self.logger.info(f"Received {response.status_code} redirect, retrying with allow_redirects=True")
                     try:
-                        response, history = self.client.request(
+                        response = self.client.request(
                             method=method.value,
-                            url=url,
+                            endpoint=url,
                             headers=headers,
                             params=params,
                             json=json,

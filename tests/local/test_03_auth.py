@@ -295,11 +295,16 @@ class Test_AuthManager_GetAuthHeaders_02_NegativeBehaviors:
     def test_provisioning_key_required_but_not_available(self):
         """Test that AuthenticationError is raised when provisioning key is required but not available."""
         api_key = "test_api_key"
-        auth_manager = AuthManager(api_key=api_key)  # No provisioning key
         
-        with pytest.raises(AuthenticationError) as excinfo:
-            auth_manager.get_auth_headers(require_provisioning=True)
-        assert "Provisioning API key is required" in str(excinfo.value)
+        # Ensure no provisioning key is available from environment
+        with patch.dict(os.environ, {}, clear=True):
+            # Only set the regular API key in the environment
+            with patch.dict(os.environ, {"OPENROUTER_API_KEY": api_key}):
+                auth_manager = AuthManager(api_key=api_key)  # No provisioning key
+                
+                with pytest.raises(AuthenticationError) as excinfo:
+                    auth_manager.get_auth_headers(require_provisioning=True)
+                assert "Provisioning API key is required" in str(excinfo.value)
 
 
 class Test_AuthManager_GetAuthHeaders_03_BoundaryBehaviors:
