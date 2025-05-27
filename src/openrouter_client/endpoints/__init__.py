@@ -11,10 +11,7 @@ Exported:
 - ModelsEndpoint: Handler for models endpoint
 - CreditsEndpoint: Handler for credits and payment endpoints
 - GenerationsEndpoint: Handler for generations history endpoints
-- ImagesEndpoint: Handler for image generation endpoints
 - KeysEndpoint: Handler for API keys management
-- PdfEndpoint: Handler for PDF processing endpoints
-- PluginsEndpoint: Handler for plugins management
 - WebEndpoint: Handler for web page processing endpoints
 """
 
@@ -24,9 +21,7 @@ from .completions import CompletionsEndpoint
 from .models import ModelsEndpoint
 from .credits import CreditsEndpoint
 from .generations import GenerationsEndpoint
-from .images import ImagesEndpoint
 from .keys import KeysEndpoint
-from .plugins import PluginsEndpoint
 from .web import WebEndpoint
 
 __all__ = [
@@ -36,8 +31,6 @@ __all__ = [
     'ModelsEndpoint',
     'CreditsEndpoint',
     'GenerationsEndpoint',
-    'ImagesEndpoint',
     'KeysEndpoint',
-    'PluginsEndpoint',
     'WebEndpoint',
 ]

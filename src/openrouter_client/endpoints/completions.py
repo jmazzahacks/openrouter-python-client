@@ -408,8 +408,6 @@ class CompletionsEndpoint(BaseEndpoint):
                         # Convert new logprobs format to legacy format if needed
                         if 'logprobs' in choice and isinstance(choice['logprobs'], dict):
                             if 'content' in choice['logprobs'] and 'refusal' in choice['logprobs']:
-                                # This is the new format, set to None for now
-                                # TODO: Implement proper conversion if needed
                                 choice['logprobs'] = None
                 
                 return CompletionsResponse.model_validate(raw_response)

@@ -10,8 +10,6 @@ Exported:
 - Models-related models (from models.py)
 - Credits-related models (from credits.py)
 - Provider-related models (from providers.py)
-- Image-related models (from images.py)
-- File-related models (from files.py)
 - Generations-related models (from generations.py)
 """
 
@@ -66,13 +64,6 @@ from .credits import (
 from .providers import (
     ProviderPreferences,
     ProviderMaxPrice,
-)
-
-from .images import (
-    ImagesRequest,
-    ImagesResponse,
-    ImageObject,
-    ImagesGenerationRequest,
 )
 
 from .generations import (
@@ -154,17 +145,6 @@ __all__ = [
     # Provider models
     "ProviderPreferences",
     "ProviderMaxPrice",
-    
-    # Images models
-    "ImagesRequest",
-    "ImagesResponse",
-    "ImageObject",
-    "ImagesGenerationRequest",
-    
-    # Files models
-    "FileObject",
-    "FileListResponse",
-    "FileUploadResponse",
     
     # Generations models
     "Generation",

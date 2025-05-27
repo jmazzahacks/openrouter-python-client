@@ -204,24 +204,27 @@ class StreamingCompletionsRequest(AbstractStreamingRequest):
             logger: Optional custom logger to use
             request_id: Optional request ID for tracking and correlation
         """
-        self.http_manager = http_manager
-        self.auth_manager = auth_manager
-        self.prompt = prompt
-        self.params = params or {}
-        self.completions = []
-        self._cancelled = False
-        self._response = None
-        
-        # Ensure stream is set to True
-        self.params['stream'] = True
+        # Initialize params first
+        params = params if params is not None else {}
+        params['stream'] = True
         
         # Build the data that will be used for the request
         data = {
-            'prompt': self.prompt,
-            **self.params
+            'prompt': prompt,
+            **params
         }
         
+        # Call parent init first
         super().__init__(endpoint, headers, params=params, data=data, chunk_size=chunk_size, state_file=state_file, logger=logger, request_id=request_id)
+        
+        # Then set instance attributes
+        self.http_manager = http_manager
+        self.auth_manager = auth_manager
+        self.prompt = prompt
+        self.params = params
+        self.completions = []
+        self._cancelled = False
+        self._response = None
         
     def stream(self) -> Iterator[List[Dict[str, Any]]]:
         """
@@ -642,8 +645,9 @@ class StreamingChatCompletionsRequest(AbstractStreamingRequest):
         self.http_manager = http_manager
         self.auth_manager = auth_manager
         self.messages = messages
-        self.params = params or {}
-        self.data = data or {}
+        # MUST explicitly set params and data to empty dicts if None
+        self.params = params if params is not None else {}
+        self.data = data if data is not None else {}
         self.completions = []
         self._cancelled = False
         self._response = None
