@@ -38,12 +38,16 @@ class KeysEndpoint(BaseEndpoint):
         # Log initialization of keys endpoint
         self.logger.debug("Initialized keys endpoint handler")
     
-    def list(self) -> List[Dict[str, Any]]:
+    def list(self, offset: Optional[int] = None, include_disabled: Optional[bool] = None) -> Dict[str, Any]:
         """
         List all API keys.
         
+        Args:
+            offset (Optional[int]): Offset for pagination.
+            include_disabled (Optional[bool]): Whether to include disabled keys.
+        
         Returns:
-            List[Dict[str, Any]]: List of API keys with metadata.
+            Dict[str, Any]: Response containing list of API keys in 'data' array.
             
         Raises:
             APIError: If the API request fails.
@@ -51,9 +55,42 @@ class KeysEndpoint(BaseEndpoint):
         # Get authentication headers (requires provisioning API key)
         headers = self._get_headers(require_provisioning=True)
         
+        # Build query parameters
+        params = {}
+        if offset is not None:
+            params["offset"] = offset
+        if include_disabled is not None:
+            params["includeDisabled"] = str(include_disabled).lower()
+        
         # Make GET request to keys endpoint
         response = self.http_manager.get(
             self._get_endpoint_url(),
+            headers=headers,
+            params=params if params else None
+        )
+        
+        # Return parsed JSON response
+        return response.json()
+    
+    def get(self, key_hash: str) -> Dict[str, Any]:
+        """
+        Get details about a specific API key.
+        
+        Args:
+            key_hash (str): The hash of the API key.
+            
+        Returns:
+            Dict[str, Any]: API key details.
+            
+        Raises:
+            APIError: If the API request fails.
+        """
+        # Get authentication headers (requires provisioning API key)
+        headers = self._get_headers(require_provisioning=True)
+        
+        # Make GET request to specific key endpoint
+        response = self.http_manager.get(
+            self._get_endpoint_url(key_hash),
             headers=headers
         )
         
@@ -61,44 +98,31 @@ class KeysEndpoint(BaseEndpoint):
         return response.json()
     
     def create(self, 
-               name: Optional[str] = None,
-               expiry: Optional[Union[str, datetime, int]] = None,
-               permissions: Optional[List[str]] = None) -> Dict[str, Any]:
+               name: str,
+               label: Optional[str] = None,
+               limit: Optional[float] = None) -> Dict[str, Any]:
         """
         Create a new API key.
         
         Args:
-            name (Optional[str]): Friendly name for the API key.
-            expiry (Optional[Union[str, datetime, int]]): Expiration date, timestamp, or days.
-            permissions (Optional[List[str]]): Specific permissions for the key.
+            name (str): Name for the API key (required).
+            label (Optional[str]): Label for the API key.
+            limit (Optional[float]): Credit limit for the key.
             
         Returns:
-            Dict[str, Any]: Created API key information.
+            Dict[str, Any]: Created API key information including the key string.
             
         Raises:
             APIError: If the API request fails.
         """
         # Prepare request data from function arguments
-        data = {}
+        data = {"name": name}
         
-        if name is not None:
-            data["name"] = name
+        if label is not None:
+            data["label"] = label
             
-        # Handle expiry parameter based on its type
-        if expiry is not None:
-            if isinstance(expiry, datetime):
-                # If expiry is datetime object, convert to ISO format string
-                data["expiry"] = expiry.isoformat()
-            elif isinstance(expiry, int):
-                # If expiry is integer, assume it's days from now
-                # The API expects an ISO date or days as integer
-                data["expiry"] = expiry  # Send the number of days directly
-            else:
-                # Otherwise, pass the expiry as-is (assumed to be properly formatted string)
-                data["expiry"] = expiry
-                
-        if permissions is not None:
-            data["permissions"] = permissions
+        if limit is not None:
+            data["limit"] = limit
                 
         # Get authentication headers (requires provisioning API key)
         headers = self._get_headers(require_provisioning=True)
@@ -119,15 +143,50 @@ class KeysEndpoint(BaseEndpoint):
             
         return result
     
-    def revoke(self, key_id: str) -> Dict[str, Any]:
+    def update(self, key_hash: str, name: Optional[str] = None, disabled: Optional[bool] = None) -> Dict[str, Any]:
         """
-        Revoke an API key.
+        Update an existing API key.
         
         Args:
-            key_id (str): ID of the API key to revoke.
+            key_hash (str): The hash of the API key to update.
+            name (Optional[str]): New name for the key.
+            disabled (Optional[bool]): Enable/disable status.
             
         Returns:
-            Dict[str, Any]: Revocation confirmation.
+            Dict[str, Any]: Updated API key details.
+            
+        Raises:
+            APIError: If the API request fails.
+        """
+        # Prepare request data
+        data = {}
+        if name is not None:
+            data["name"] = name
+        if disabled is not None:
+            data["disabled"] = disabled
+            
+        # Get authentication headers (requires provisioning API key)
+        headers = self._get_headers(require_provisioning=True)
+        
+        # Make PATCH request to specific key endpoint
+        response = self.http_manager.patch(
+            self._get_endpoint_url(key_hash),
+            headers=headers,
+            json=data
+        )
+        
+        # Return parsed JSON response
+        return response.json()
+    
+    def delete(self, key_hash: str) -> Dict[str, Any]:
+        """
+        Delete an API key.
+        
+        Args:
+            key_hash (str): The hash of the API key to delete.
+            
+        Returns:
+            Dict[str, Any]: Deletion confirmation.
             
         Raises:
             APIError: If the API request fails.
@@ -135,42 +194,33 @@ class KeysEndpoint(BaseEndpoint):
         # Get authentication headers (requires provisioning API key)
         headers = self._get_headers(require_provisioning=True)
         
-        # Make DELETE request to specific key endpoint using key_id
+        # Make DELETE request to specific key endpoint
         response = self.http_manager.delete(
-            self._get_endpoint_url(key_id),
+            self._get_endpoint_url(key_hash),
             headers=headers
         )
         
         # Return parsed JSON response
         return response.json()
     
-    def rotate(self, key_id: str) -> Dict[str, Any]:
+    def get_current(self) -> Dict[str, Any]:
         """
-        Rotate an API key (revoke old and create new with same permissions).
+        Get information about the currently authenticated API key.
         
-        Args:
-            key_id (str): ID of the API key to rotate.
-            
         Returns:
-            Dict[str, Any]: New API key information.
+            Dict[str, Any]: Current API key information including usage and limits.
             
         Raises:
             APIError: If the API request fails.
         """
-        # Get authentication headers (requires provisioning API key)
-        headers = self._get_headers(require_provisioning=True)
+        # Get authentication headers (uses current API key, not provisioning key)
+        headers = self._get_headers(require_provisioning=False)
         
-        # Make POST request to specific key rotation endpoint using key_id
-        response = self.http_manager.post(
-            self._get_endpoint_url(f"{key_id}/rotate"),
+        # Make GET request to auth/key endpoint
+        response = self.http_manager.get(
+            "auth/key",
             headers=headers
         )
         
-        # Get the response with the new API key
-        result = response.json()
-        
-        # Log warning that key will only be shown once and should be saved
-        if "key" in result:
-            self.logger.warning("New API key will only be shown once. Make sure to save it securely.")
-            
-        return result
+        # Return parsed JSON response
+        return response.json()
