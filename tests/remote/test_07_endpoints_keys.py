@@ -511,7 +511,7 @@ class Test_KeysEndpoint_Revoke_01_NominalBehaviors(TestKeysEndpointFixtures):
     def test_revoke_specific_production_key(self, keys_endpoint):
         """Test revoking the specific production key as requested in requirements."""
         # Arrange
-        specific_key_id = "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"
+        specific_key_id = "valid_key"
         
         # Act & Assert
         try:
