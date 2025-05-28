@@ -1,8 +1,45 @@
 """
 Main OpenRouter client implementation.
 
-This module defines the public OpenRouterClient class, which serves as the main
-entry point for interacting with all OpenRouter API endpoints and services.
+This module defines the OpenRouterClient class, which serves as the primary interface
+for interacting with the OpenRouter API. The client provides a unified, type-safe
+interface to all available endpoints with automatic rate limiting, retry logic,
+and comprehensive error handling.
+
+Key Features:
+- Unified access to all OpenRouter API endpoints (chat, completions, models, etc.)
+- Automatic rate limiting based on API key limits
+- Smart retry logic with exponential backoff
+- Context length management and tracking
+- Secure API key handling with optional encryption
+- Context manager support for resource cleanup
+- Credit-based rate limit calculation
+- Comprehensive logging and error handling
+
+Available Endpoints:
+- client.chat: Chat completions API with streaming and function calling support
+- client.completions: Text completions API with streaming support
+- client.models: Model information, context lengths, and pricing
+- client.generations: Generation metadata and details
+- client.credits: Credit balance and usage tracking
+- client.keys: API key management and provisioning
+
+Example:
+    >>> client = OpenRouterClient(api_key="your-api-key")
+    >>> 
+    >>> # Chat completion
+    >>> response = client.chat.create(
+    ...     model="anthropic/claude-3-opus",
+    ...     messages=[{"role": "user", "content": "Hello!"}]
+    ... )
+    >>> 
+    >>> # Context manager usage
+    >>> with OpenRouterClient(api_key="your-api-key") as client:
+    ...     response = client.chat.create(...)
+    
+    >>> # Rate limit management
+    >>> rate_limits = client.calculate_rate_limits()
+    >>> context_length = client.get_context_length("anthropic/claude-3-opus")
 
 Exported:
 - OpenRouterClient: Main client class for OpenRouter API interaction

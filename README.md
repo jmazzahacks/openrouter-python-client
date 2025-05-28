@@ -7,17 +7,17 @@ An unofficial Python client for [OpenRouter](https://openrouter.ai/), providing 
 
 ## Features
 
-- **Full API Support**: Access all* OpenRouter endpoints including chat completions, text completions, model information, and more
+- **Full API Support**: Access all major OpenRouter endpoints including chat completions, text completions, model information, generations, credits, and API key management
 - **Streaming Support**: Stream responses from chat and completion endpoints
-- **Resume Support**: Resume from a previous request if it fails or is interrupted (incurs additional costs for input tokens)
-- **Automatic Rate Limiting**: Automatically configures rate limits based on your API key's limits
+- **Automatic Rate Limiting**: Automatically configures rate limits based on your API key's limits using SmartSurge
 - **Smart Retries**: Built-in retry logic with exponential backoff for reliable API communication
-- **Type Safety**: Fully typed interfaces with Pydantic models
-- **Async Support**: Both synchronous and asynchronous API interfaces
-- **Safe Key Management**: Safely manage API keys with in-memory encryption and adapter class for using your choice of external key management system
-- **Tiered API**: High-level client class, mid-level helper functions, and low-level endpoint and request classes
-
-* _The Coinbase endpoint is not currently supported._
+- **Type Safety**: Fully typed interfaces with Pydantic models for all request and response data
+- **Function Calling**: Built-in support for OpenAI-style function calling with tools and decorators
+- **Prompt Caching**: Support for prompt caching on compatible models (OpenAI and Anthropic)
+- **Safe Key Management**: Secure API key management with in-memory encryption and extensible secrets management
+- **Context Length Management**: Automatic tracking and querying of model context lengths
+- **Credit Management**: Monitor usage, calculate rate limits based on available credits
+- **Comprehensive Testing**: Extensive test suite with both local unit tests and remote integration tests
 
 ## Disclaimer
 
@@ -46,7 +46,7 @@ client = OpenRouterClient(
 )
 
 # Chat completion example
-response = client.chat.completions.create(
+response = client.chat.create(
     model="anthropic/claude-3-opus",  # Or any other model on OpenRouter
     messages=[
         {"role": "system", "content": "You are a helpful assistant."},
@@ -100,7 +100,7 @@ from openrouter_client import OpenRouterClient
 client = OpenRouterClient(api_key="your-api-key")
 
 # Stream the response
-for chunk in client.chat.completions.create(
+for chunk in client.chat.create(
     model="openai/gpt-4",
     messages=[
         {"role": "user", "content": "Write a short poem about AI."}
@@ -114,41 +114,58 @@ for chunk in client.chat.completions.create(
 ### Function Calling
 
 ```python
-from openrouter_client import OpenRouterClient
-from openrouter_client.models import create_tool, string_param, parse_tool_call_arguments
+from openrouter_client import OpenRouterClient, tool
+from openrouter_client.models import ChatCompletionTool, FunctionDefinition, StringParameter, FunctionParameters
 
 client = OpenRouterClient(api_key="your-api-key")
 
-# Define a tool
-weather_tool = create_tool(
-    name="get_weather",
-    description="Get the weather for a location",
-    parameters={
-        "properties": {
-            "location": string_param(
-                description="The city and state", 
-                required=True
-            ),
-        },
-        "required": ["location"],
-    }
+# Method 1: Using the @tool decorator (recommended)
+@tool
+def get_weather(location: str) -> str:
+    """Get the weather for a location.
+    
+    Args:
+        location: The city and state
+        
+    Returns:
+        Weather information for the location
+    """
+    # Your weather API logic here
+    return f"The weather in {location} is sunny."
+
+# Method 2: Manual tool definition
+weather_tool = ChatCompletionTool(
+    type="function",
+    function=FunctionDefinition(
+        name="get_weather",
+        description="Get the weather for a location",
+        parameters=FunctionParameters(
+            type="object",
+            properties={
+                "location": StringParameter(
+                    type="string",
+                    description="The city and state"
+                )
+            },
+            required=["location"]
+        )
+    )
 )
 
 # Make a request with tool
-response = client.chat.completions.create(
+response = client.chat.create(
     model="anthropic/claude-3-opus",
     messages=[
         {"role": "user", "content": "What's the weather like in San Francisco?"}
     ],
-    tools=[weather_tool],
+    tools=[get_weather],  # Using the decorated function
 )
 
 # Process tool calls
 if response.choices[0].message.tool_calls:
     tool_call = response.choices[0].message.tool_calls[0]
-    args = parse_tool_call_arguments(tool_call)
     print(f"Tool called: {tool_call.function.name}")
-    print(f"Arguments: {args}")
+    print(f"Arguments: {tool_call.function.arguments}")
 ```
 
 ### Prompt Caching
@@ -159,16 +176,15 @@ from openrouter_client import OpenRouterClient
 client = OpenRouterClient(api_key="your-api-key")
 
 # OpenAI models: automatic caching for prompts > 1024 tokens
-response = client.chat.completions.create(
+response = client.chat.create(
     model="openai/gpt-3.5-turbo",
     messages=[
         {"role": "user", "content": f"Here is a long document: {long_text}\n\nSummarize this document."}
-    ],
-    include={"usage": True}  # See caching metrics
+    ]
 )
 
 # Anthropic models: explicit cache_control markers
-response = client.chat.completions.create(
+response = client.chat.create(
     model="anthropic/claude-3-opus",
     messages=[
         {
@@ -180,8 +196,7 @@ response = client.chat.completions.create(
                 {"type": "text", "text": "Summarize this document."}
             ]
         }
-    ],
-    include={"usage": True}
+    ]
 )
 ```
 
@@ -229,10 +244,9 @@ new_key = client.keys.create(
 - `client.chat`: Chat completions API
 - `client.completions`: Text completions API
 - `client.models`: Model information and selection
-- `client.images`: Image generation capabilities
-- `client.generations`: Generation statistics
-- `client.credits`: Credit management
-- `client.keys`: API key management
+- `client.generations`: Generation metadata and details
+- `client.credits`: Credit management and usage tracking
+- `client.keys`: API key management and provisioning
 
 ## License
 

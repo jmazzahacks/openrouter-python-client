@@ -1,21 +1,28 @@
 """
-OpenRouter Client package initialization.
+OpenRouter Python Client - Unofficial Python client for the OpenRouter API.
 
-This module initializes the OpenRouter Client package, exposing the main client
-class and configuring package-wide settings for interacting with OpenRouter API.
+This package provides a comprehensive, type-safe interface for interacting with 
+the OpenRouter API, supporting all major endpoints including chat completions, 
+text completions, model information, generations, credits, and API key management.
 
-Exported:
+Features:
+- Full API Support: Chat completions, text completions, models, generations, credits, keys
+- Streaming Support: Real-time streaming for chat and text completions
+- Automatic Rate Limiting: Smart rate limiting based on API key limits using SmartSurge
+- Type Safety: Fully typed interfaces with Pydantic models
+- Function Calling: Built-in support for OpenAI-style function calling with decorators
+- Prompt Caching: Support for prompt caching on compatible models
+- Safe Key Management: Secure API key handling with encryption and extensible secrets management
+- Context Length Management: Automatic tracking and querying of model context lengths
+- Comprehensive Testing: Extensive test suite with local unit tests and remote integration tests
+
+Main Classes:
 - OpenRouterClient: Main client for interacting with OpenRouter API
-- __version__: Package version
-- configure_logging: Logging configuration function
-- AuthManager: Authentication and API key manager
-- HTTPManager: HTTP communication manager with rate limiting
-- RequestMethod: Enum of HTTP methods
+- AuthManager: Authentication and API key manager with encryption support
+- HTTPManager: HTTP communication manager with smart rate limiting and retries
+- SecretsManager: Base class for custom secrets management implementations
 
-- TokenCounter: Token counting utility
-- determine_context_length: Context length determination function
-
-Tool utilities:
+Tool Utilities:
 - tool: Decorator for creating typed tools from Python functions
 - build_tool_definition: Create a ToolDefinition from a function
 - build_chat_completion_tool: Create a ChatCompletionTool from a function
@@ -24,12 +31,24 @@ Tool utilities:
 - build_parameter_schema: Convert Python type annotations to parameter schema
 - build_function_call: Create a function call from a function and arguments
 - build_tool_call: Create a tool call from a function and arguments
+
+Factory Functions:
 - create_function_definition_from_dict: Create a function definition from a dictionary
 - create_tool_definition_from_dict: Create a tool definition from a dictionary
 - create_chat_completion_tool_from_dict: Create a chat completion tool from a dictionary
 - create_function_call_from_dict: Create a function call from a dictionary
 - create_tool_call_from_dict: Create a tool call from a dictionary
 - create_parameter_schema_from_value: Create parameter schema from a value
+
+Example:
+    >>> from openrouter_client import OpenRouterClient
+    >>> 
+    >>> client = OpenRouterClient(api_key="your-api-key")
+    >>> response = client.chat.create(
+    ...     model="anthropic/claude-3-opus",
+    ...     messages=[{"role": "user", "content": "Hello!"}]
+    ... )
+    >>> print(response.choices[0].message.content)
 """
 from .client import OpenRouterClient
 from .version import __version__
