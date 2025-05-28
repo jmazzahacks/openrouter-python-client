@@ -7,16 +7,13 @@ An unofficial Python client for [OpenRouter](https://openrouter.ai/), providing 
 
 ## Features
 
-- **Full API Support**: Access all major OpenRouter endpoints including chat completions, text completions, model information, generations, credits, and API key management
+- **Full API Support (Almost)**: Access all major OpenRouter endpoints including chat completions, text completions, model information, generations, credits, and API key management
 - **Streaming Support**: Stream responses from chat and completion endpoints
 - **Automatic Rate Limiting**: Automatically configures rate limits based on your API key's limits using SmartSurge
 - **Smart Retries**: Built-in retry logic with exponential backoff for reliable API communication
 - **Type Safety**: Fully typed interfaces with Pydantic models for all request and response data
-- **Function Calling**: Built-in support for OpenAI-style function calling with tools and decorators
-- **Prompt Caching**: Support for prompt caching on compatible models (OpenAI and Anthropic)
+- **Tool Calling**: Built-in support for tool-calling with helper functions and decorators
 - **Safe Key Management**: Secure API key management with in-memory encryption and extensible secrets management
-- **Context Length Management**: Automatic tracking and querying of model context lengths
-- **Credit Management**: Monitor usage, calculate rate limits based on available credits
 - **Comprehensive Testing**: Extensive test suite with both local unit tests and remote integration tests
 
 ## Disclaimer
@@ -28,8 +25,6 @@ Your use of the OpenRouter API through this interface is subject to OpenRouter's
 This project is an open-source interface designed to interact with the OpenRouter API. It is provided "as-is," without any warranty, express or implied, under the terms of the Apache 2.0 License.
 
 ## Installation
-
-> **Note**: The PyPi package won't be published until initial testing for `openrouter-client-unofficial` is complete.
 
 ```bash
 pip install openrouter-client-unofficial

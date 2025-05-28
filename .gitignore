@@ -16,4 +16,5 @@ layout.md
 openrouter_api_spec.md
 openrouter-client.md
 test_imports.py
+future_todos.txt
 *.json
