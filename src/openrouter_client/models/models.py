@@ -255,10 +255,10 @@ class ModelEndpointsResponse(BaseModel):
     """
     Response structure for the model endpoints list.
     
-    Note: The API returns a nested structure with model data and endpoints.
-    
     Attributes:
-        data (dict): Contains model information and endpoints list.
+        object (str): Object type, typically "list".
+        data (dict): Model information dictionary containing model details.
     """
-    data: dict = Field(..., description="Contains model information and endpoints list")
+    object: str = Field("list", description="Object type, typically 'list'")
+    data: dict = Field(..., description="Model information dictionary containing model details")
 

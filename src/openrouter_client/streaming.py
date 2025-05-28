@@ -43,6 +43,7 @@ class OpenRouterStreamingState(BaseStreamingState):
         headers: HTTP headers for the request
         params: Optional query parameters
         data: Optional request body data
+        chunk_size: Size of chunks to process
         accumulated_data: Data accumulated so far
         last_position: Last position in the stream
         total_size: Total size of the stream if known
@@ -55,6 +56,7 @@ class OpenRouterStreamingState(BaseStreamingState):
     headers: Dict[str, str]
     params: Optional[Dict[str, Any]] = None
     data: Optional[Dict[str, Any]] = None
+    chunk_size: int = Field(default=8192, ge=1)
     accumulated_data: bytes
     last_position: int = Field(..., ge=0)
     total_size: Optional[int] = None

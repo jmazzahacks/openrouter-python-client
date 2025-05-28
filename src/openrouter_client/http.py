@@ -329,6 +329,105 @@ class HTTPManager:
         kwargs['stream'] = True
         return self.request(method=method, endpoint=endpoint, **kwargs)
 
+    def set_rate_limit(self, 
+                       endpoint: str,
+                       method: Union[str, RequestMethod],
+                       max_requests: int, 
+                       time_period: float,
+                       cooldown: Optional[float] = None) -> None:
+        """
+        Set the rate limit for a specific API endpoint and method.
+        
+        This method passes through to SmartSurgeClient.set_rate_limit to dynamically
+        adjust rate limiting parameters for a specific endpoint/method combination.
+        
+        Args:
+            endpoint (str): The API endpoint to set rate limit for.
+            method (Union[str, RequestMethod]): HTTP method (GET, POST, etc.).
+            max_requests (int): Maximum number of requests allowed per time period.
+            time_period (float): Time period in seconds for the rate limit.
+            cooldown (Optional[float]): Cooldown period in seconds after hitting the limit.
+            
+        Raises:
+            AttributeError: If the client doesn't support set_rate_limit.
+            ValueError: If invalid rate limit parameters are provided.
+        """
+        if not hasattr(self.client, 'set_rate_limit'):
+            raise AttributeError(
+                "The HTTP client does not support dynamic rate limit configuration. "
+                "Ensure you're using SmartSurgeClient."
+            )
+        
+        # Convert RequestMethod enum to string if needed
+        if isinstance(method, RequestMethod):
+            method = method.value
+        
+        # Log the rate limit change
+        self.logger.info(
+            f"Setting rate limit for {method} {endpoint}: "
+            f"max_requests={max_requests}, time_period={time_period}s, cooldown={cooldown}s"
+        )
+        
+        try:
+            # Pass through to SmartSurgeClient
+            self.client.set_rate_limit(
+                endpoint=endpoint,
+                method=method,
+                max_requests=max_requests,
+                time_period=time_period,
+                cooldown=cooldown
+            )
+            self.logger.debug(f"Rate limit successfully updated for {method} {endpoint}")
+        except Exception as e:
+            self.logger.error(f"Failed to set rate limit: {str(e)}")
+            raise
+    
+    def set_global_rate_limit(self,
+                            max_requests: int,
+                            time_period: float,
+                            cooldown: Optional[float] = None) -> None:
+        """
+        Set a global rate limit for all common OpenRouter API endpoints.
+        
+        This is a convenience method that applies the same rate limit to all
+        standard OpenRouter endpoints. For fine-grained control, use set_rate_limit().
+        
+        Args:
+            max_requests (int): Maximum number of requests allowed per time period.
+            time_period (float): Time period in seconds for the rate limit.
+            cooldown (Optional[float]): Cooldown period in seconds after hitting the limit.
+        """
+        # Common OpenRouter endpoints
+        common_endpoints = [
+            ('/chat/completions', 'POST'),
+            ('/completions', 'POST'),
+            ('/models', 'GET'),
+            ('/credits', 'GET'),
+            ('/generation', 'GET'),
+            ('/auth/key', 'GET'),
+            ('/auth/keys', 'POST'),
+            ('/keys', 'POST'),
+        ]
+        
+        self.logger.info(
+            f"Setting global rate limit: max_requests={max_requests}, "
+            f"time_period={time_period}s, cooldown={cooldown}s"
+        )
+        
+        for endpoint, method in common_endpoints:
+            try:
+                self.set_rate_limit(
+                    endpoint=endpoint,
+                    method=method,
+                    max_requests=max_requests,
+                    time_period=time_period,
+                    cooldown=cooldown
+                )
+            except Exception as e:
+                self.logger.warning(
+                    f"Failed to set rate limit for {method} {endpoint}: {str(e)}"
+                )
+    
     def close(self) -> None:
         """
         Close the HTTP manager and release resources.

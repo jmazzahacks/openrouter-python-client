@@ -1,17 +1,31 @@
-# OpenRouter Python Client
+# OpenRouter Python Client (Unofficial)
+
+<img src="images/openrouter_client_logo.png" alt="OpenRouter Client (Unofficial) Logo" width="830" height="415">
+<br>
 
 An unofficial Python client for [OpenRouter](https://openrouter.ai/), providing a comprehensive interface for interacting with large language models through the OpenRouter API.
 
 ## Features
 
-- **Full API Support**: Access all OpenRouter endpoints including chat completions, text completions, images, model information, and more
+- **Full API Support**: Access all* OpenRouter endpoints including chat completions, text completions, model information, and more
 - **Streaming Support**: Stream responses from chat and completion endpoints
 - **Resume Support**: Resume from a previous request if it fails or is interrupted (incurs additional costs for input tokens)
-- **Rate Limiting & Retries**: Built-in rate limiting and retry logic for reliable API communication
+- **Automatic Rate Limiting**: Automatically configures rate limits based on your API key's limits
+- **Smart Retries**: Built-in retry logic with exponential backoff for reliable API communication
 - **Type Safety**: Fully typed interfaces with Pydantic models
 - **Async Support**: Both synchronous and asynchronous API interfaces
 - **Safe Key Management**: Safely manage API keys with in-memory encryption and adapter class for using your choice of external key management system
 - **Tiered API**: High-level client class, mid-level helper functions, and low-level endpoint and request classes
+
+* _The Coinbase endpoint is not currently supported._
+
+## Disclaimer
+
+This project is independently developed and is not affiliated with, endorsed, or sponsored by OpenRouter, Inc.
+
+Your use of the OpenRouter API through this interface is subject to OpenRouter's Terms of Service, Privacy Policy, and any other relevant agreements provided by OpenRouter, Inc. You are responsible for reviewing and complying with these terms.
+
+This project is an open-source interface designed to interact with the OpenRouter API. It is provided "as-is," without any warranty, express or implied, under the terms of the Apache 2.0 License.
 
 ## Installation
 
@@ -50,6 +64,7 @@ from openrouter_client import OpenRouterClient
 
 client = OpenRouterClient(
     api_key="your-api-key",  # API key for authentication
+    provisioning_api_key="your-prov-key",  # Optional: for API key management
     base_url="https://openrouter.ai/api/v1",  # Base URL for API
     organization_id="your-org-id",  # Optional organization ID
     reference_id="your-ref-id",  # Optional reference ID
@@ -57,8 +72,22 @@ client = OpenRouterClient(
     timeout=60.0,  # Request timeout in seconds
     retries=3,  # Number of retries for failed requests
     backoff_factor=0.5,  # Exponential backoff factor
-    rate_limit=None,  # Optional rate limit configuration
+    rate_limit=None,  # Optional custom rate limit (auto-configured by default)
 )
+```
+
+### Automatic Rate Limiting
+
+The client automatically configures rate limits based on your API key's limits during initialization. It fetches your current key information and sets appropriate rate limits to prevent hitting API limits. This happens transparently when you create a new client instance.
+
+If you need custom rate limiting, you can still provide your own configuration via the `rate_limit` parameter.
+
+You can also calculate rate limits based on your remaining credits:
+
+```python
+# Calculate rate limits based on available credits
+rate_limits = client.calculate_rate_limits()
+print(f"Recommended: {rate_limits['requests']} requests per {rate_limits['period']} seconds")
 ```
 
 ## Examples
@@ -156,6 +185,45 @@ response = client.chat.completions.create(
 )
 ```
 
+### Context Length Management
+
+The client provides built-in context length management:
+
+```python
+# Refresh model context lengths from the API
+context_lengths = client.refresh_context_lengths()
+
+# Get context length for a specific model
+max_tokens = client.get_context_length("anthropic/claude-3-opus")
+print(f"Claude 3 Opus supports up to {max_tokens} tokens")
+```
+
+### API Key Management
+
+Manage API keys programmatically (requires provisioning API key):
+
+```python
+client = OpenRouterClient(
+    api_key="your-api-key",
+    provisioning_api_key="your-provisioning-key"
+)
+
+# Get current key information
+key_info = client.keys.get_current()
+print(f"Current usage: {key_info['data']['usage']} credits")
+print(f"Rate limit: {key_info['data']['rate_limit']['requests']} requests per {key_info['data']['rate_limit']['interval']}")
+
+# List all keys
+keys = client.keys.list()
+
+# Create a new key
+new_key = client.keys.create(
+    name="My New Key",
+    label="Production API Key",
+    limit=1000.0  # Credit limit
+)
+```
+
 ## Available Endpoints
 
 - `client.chat`: Chat completions API
@@ -165,8 +233,6 @@ response = client.chat.completions.create(
 - `client.generations`: Generation statistics
 - `client.credits`: Credit management
 - `client.keys`: API key management
-- `client.plugins`: Plugin operations
-- `client.web`: Web search functionality
 
 ## License
 

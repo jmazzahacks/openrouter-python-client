@@ -246,7 +246,7 @@ class Test_ChatEndpoint_Create_01_NominalBehaviors(TestFixtures):
     @pytest.mark.parametrize("model", [
         "anthropic/claude-3-haiku",
         "mistralai/mistral-small-3.1-24b-instruct", 
-        "cohere/command-r7b-12-2024",
+        "openai/gpt-4o-mini-2024-07-18",
         "qwen/qwen3-8b"
     ])
     def test_standard_chat_completion_requests(self, chat_endpoint: ChatEndpoint, valid_messages: List[Dict], model: str):

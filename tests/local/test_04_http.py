@@ -766,3 +766,248 @@ class Test_HTTPManager_Close_04_ErrorHandlingBehaviors:
         
         # Execute - should not raise an exception
         http_manager.close()  # This should complete without error
+
+
+class Test_HTTPManager_SetRateLimit_01_NominalBehaviors:
+    """Test nominal behaviors for the HTTPManager set_rate_limit method."""
+    
+    def test_set_rate_limit_with_valid_parameters(self):
+        """
+        Test setting rate limit with valid parameters.
+        
+        Verifies that set_rate_limit correctly delegates to SmartSurgeClient
+        with the provided parameters.
+        """
+        # Create a mock client with set_rate_limit method
+        mock_client = Mock(spec=SmartSurgeClient)
+        mock_client.set_rate_limit = Mock()
+        
+        # Create the HTTP manager
+        http_manager = HTTPManager(client=mock_client)
+        
+        # Execute
+        http_manager.set_rate_limit(
+            endpoint="/chat/completions",
+            method="POST",
+            max_requests=10,
+            time_period=60.0,
+            cooldown=5.0
+        )
+        
+        # Verify client.set_rate_limit was called with correct parameters
+        mock_client.set_rate_limit.assert_called_once_with(
+            endpoint="/chat/completions",
+            method="POST",
+            max_requests=10,
+            time_period=60.0,
+            cooldown=5.0
+        )
+    
+    def test_set_rate_limit_with_request_method_enum(self):
+        """
+        Test setting rate limit with RequestMethod enum.
+        
+        Verifies that set_rate_limit correctly converts RequestMethod enum
+        to string before passing to SmartSurgeClient.
+        """
+        # Create a mock client with set_rate_limit method
+        mock_client = Mock(spec=SmartSurgeClient)
+        mock_client.set_rate_limit = Mock()
+        
+        # Create the HTTP manager
+        http_manager = HTTPManager(client=mock_client)
+        
+        # Execute with RequestMethod enum
+        http_manager.set_rate_limit(
+            endpoint="/models",
+            method=RequestMethod.GET,
+            max_requests=50,
+            time_period=60.0
+        )
+        
+        # Verify client.set_rate_limit was called with string method
+        mock_client.set_rate_limit.assert_called_once_with(
+            endpoint="/models",
+            method="GET",
+            max_requests=50,
+            time_period=60.0,
+            cooldown=None
+        )
+    
+    def test_set_rate_limit_without_cooldown(self):
+        """
+        Test setting rate limit without cooldown parameter.
+        
+        Verifies that set_rate_limit works correctly when cooldown
+        is not provided (uses default None).
+        """
+        # Create a mock client with set_rate_limit method
+        mock_client = Mock(spec=SmartSurgeClient)
+        mock_client.set_rate_limit = Mock()
+        
+        # Create the HTTP manager
+        http_manager = HTTPManager(client=mock_client)
+        
+        # Execute without cooldown
+        http_manager.set_rate_limit(
+            endpoint="/credits",
+            method="GET",
+            max_requests=100,
+            time_period=60.0
+        )
+        
+        # Verify client.set_rate_limit was called with cooldown=None
+        mock_client.set_rate_limit.assert_called_once_with(
+            endpoint="/credits",
+            method="GET",
+            max_requests=100,
+            time_period=60.0,
+            cooldown=None
+        )
+
+
+class Test_HTTPManager_SetRateLimit_02_NegativeBehaviors:
+    """Test negative behaviors for the HTTPManager set_rate_limit method."""
+    
+    def test_set_rate_limit_with_client_without_method(self):
+        """
+        Test setting rate limit when client doesn't support it.
+        
+        Verifies that set_rate_limit raises AttributeError when the
+        client doesn't have set_rate_limit method.
+        """
+        # Create a client without set_rate_limit method
+        mock_client = Mock()
+        # Ensure there's no set_rate_limit method
+        if hasattr(mock_client, "set_rate_limit"):
+            delattr(mock_client, "set_rate_limit")
+        
+        # Create the HTTP manager
+        http_manager = HTTPManager(client=mock_client)
+        
+        # Execute and expect AttributeError
+        with pytest.raises(AttributeError) as exc_info:
+            http_manager.set_rate_limit(
+                endpoint="/chat/completions",
+                method="POST",
+                max_requests=10,
+                time_period=60.0
+            )
+        
+        # Verify error message
+        assert "does not support dynamic rate limit configuration" in str(exc_info.value)
+
+
+class Test_HTTPManager_SetRateLimit_04_ErrorHandlingBehaviors:
+    """Test error handling behaviors for the HTTPManager set_rate_limit method."""
+    
+    def test_set_rate_limit_propagates_client_errors(self):
+        """
+        Test that set_rate_limit propagates errors from the client.
+        
+        Verifies that exceptions from SmartSurgeClient.set_rate_limit
+        are properly propagated.
+        """
+        # Create a mock client that raises an exception
+        mock_client = Mock(spec=SmartSurgeClient)
+        mock_client.set_rate_limit = Mock(side_effect=ValueError("Invalid rate limit"))
+        
+        # Create the HTTP manager
+        http_manager = HTTPManager(client=mock_client)
+        
+        # Execute and expect ValueError
+        with pytest.raises(ValueError) as exc_info:
+            http_manager.set_rate_limit(
+                endpoint="/chat/completions",
+                method="POST",
+                max_requests=-1,  # Invalid value
+                time_period=60.0
+            )
+        
+        # Verify error message
+        assert "Invalid rate limit" in str(exc_info.value)
+
+
+class Test_HTTPManager_SetGlobalRateLimit_01_NominalBehaviors:
+    """Test nominal behaviors for the HTTPManager set_global_rate_limit method."""
+    
+    def test_set_global_rate_limit_applies_to_all_endpoints(self):
+        """
+        Test that set_global_rate_limit applies rate limit to all common endpoints.
+        
+        Verifies that the method calls set_rate_limit for each common
+        OpenRouter endpoint.
+        """
+        # Create a mock client with set_rate_limit method
+        mock_client = Mock(spec=SmartSurgeClient)
+        mock_client.set_rate_limit = Mock()
+        
+        # Create the HTTP manager
+        http_manager = HTTPManager(client=mock_client)
+        
+        # Execute
+        http_manager.set_global_rate_limit(
+            max_requests=50,
+            time_period=60.0,
+            cooldown=10.0
+        )
+        
+        # Define expected endpoints
+        expected_endpoints = [
+            ('/chat/completions', 'POST'),
+            ('/completions', 'POST'),
+            ('/models', 'GET'),
+            ('/credits', 'GET'),
+            ('/generation', 'GET'),
+            ('/auth/key', 'GET'),
+            ('/auth/keys', 'POST'),
+            ('/keys', 'POST'),
+        ]
+        
+        # Verify set_rate_limit was called for each endpoint
+        assert mock_client.set_rate_limit.call_count == len(expected_endpoints)
+        
+        # Verify each call
+        for i, (endpoint, method) in enumerate(expected_endpoints):
+            call_args = mock_client.set_rate_limit.call_args_list[i]
+            assert call_args == ((endpoint, method, 50, 60.0, 10.0),) or \
+                   call_args == ((), {'endpoint': endpoint, 'method': method, 
+                                     'max_requests': 50, 'time_period': 60.0, 
+                                     'cooldown': 10.0})
+
+
+class Test_HTTPManager_SetGlobalRateLimit_04_ErrorHandlingBehaviors:
+    """Test error handling behaviors for the HTTPManager set_global_rate_limit method."""
+    
+    def test_set_global_rate_limit_continues_on_individual_failures(self):
+        """
+        Test that set_global_rate_limit continues even if some endpoints fail.
+        
+        Verifies that the method logs warnings but continues setting
+        rate limits for other endpoints if one fails.
+        """
+        # Create a mock client that fails on specific endpoints
+        mock_client = Mock(spec=SmartSurgeClient)
+        call_count = 0
+        
+        def side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            # Fail on the third call
+            if call_count == 3:
+                raise ValueError("Endpoint not supported")
+            return None
+        
+        mock_client.set_rate_limit = Mock(side_effect=side_effect)
+        
+        # Create the HTTP manager
+        http_manager = HTTPManager(client=mock_client)
+        
+        # Execute - should not raise exception
+        http_manager.set_global_rate_limit(
+            max_requests=50,
+            time_period=60.0
+        )
+        
+        # Verify set_rate_limit was called 8 times (all endpoints)
+        assert mock_client.set_rate_limit.call_count == 8

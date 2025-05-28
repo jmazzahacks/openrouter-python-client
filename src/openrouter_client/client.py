@@ -9,7 +9,8 @@ Exported:
 """
 
 import logging
-from typing import Dict, Optional, Any
+import re
+from typing import Dict, Optional, Any, Union
 
 from .auth import AuthManager, SecretsManager
 from .http import HTTPManager
@@ -101,6 +102,9 @@ class OpenRouterClient:
             # Initialize all endpoint handlers
             self._initialize_endpoints()
             
+            # Set rate limit from API key information
+            self._initialize_rate_limit()
+            
             self.logger.info(
                 f"OpenRouterClient initialized successfully with base_url={base_url}, "
                 f"provisioning_key={'available' if provisioning_api_key else 'not available'}"
@@ -158,6 +162,92 @@ class OpenRouterClient:
         
         
         self.logger.debug("All endpoint handlers initialized successfully")
+    
+    def _parse_interval_to_seconds(self, interval: str) -> float:
+        """
+        Parse an interval string to seconds.
+        
+        Args:
+            interval (str): Interval string like "10s", "5m", "1h", etc.
+            
+        Returns:
+            float: Number of seconds.
+            
+        Raises:
+            ValueError: If the interval format is invalid.
+        """
+        # Match patterns like "10s", "5m", "1h", "30", "1.5h"
+        match = re.match(r'^(\d+(?:\.\d+)?)\s*([smhd]?)$', interval.strip())
+        if not match:
+            raise ValueError(f"Invalid interval format: {interval}")
+        
+        value = float(match.group(1))
+        unit = match.group(2) or 's'  # Default to seconds if no unit
+        
+        multipliers = {
+            's': 1,        # seconds
+            'm': 60,       # minutes
+            'h': 3600,     # hours
+            'd': 86400     # days
+        }
+        
+        return value * multipliers[unit]
+    
+    def _initialize_rate_limit(self) -> None:
+        """
+        Initialize rate limit based on the current API key's limits.
+        
+        Fetches the current key information and sets the global rate limit
+        accordingly. If fetching fails, logs a warning and continues.
+        """
+        try:
+            # Get current API key information
+            key_info = self.keys.get_current()
+            
+            if not isinstance(key_info, dict) or 'data' not in key_info:
+                self.logger.warning("Unexpected response format from keys.get_current")
+                return
+            
+            data = key_info['data']
+            if not isinstance(data, dict) or 'rate_limit' not in data:
+                self.logger.debug("No rate limit information in API key response")
+                return
+            
+            rate_limit = data['rate_limit']
+            if not isinstance(rate_limit, dict):
+                self.logger.warning("Invalid rate_limit format in API key response")
+                return
+            
+            # Extract rate limit parameters
+            requests = rate_limit.get('requests')
+            interval = rate_limit.get('interval')
+            
+            if requests is None or interval is None:
+                self.logger.warning("Missing requests or interval in rate_limit")
+                return
+            
+            # Convert interval to seconds
+            try:
+                time_period = self._parse_interval_to_seconds(interval)
+            except ValueError as e:
+                self.logger.warning(f"Failed to parse interval '{interval}': {e}")
+                return
+            
+            # Set the global rate limit
+            self._set_global_rate_limit(
+                max_requests=int(requests),
+                time_period=time_period
+            )
+            
+            self.logger.info(
+                f"Rate limit initialized from API key: {requests} requests per {interval} "
+                f"({requests} requests per {time_period}s)"
+            )
+            
+        except Exception as e:
+            # Log warning but don't fail initialization
+            self.logger.warning(f"Failed to initialize rate limit from API key: {e}")
+            # Continue without setting rate limit
 
     def refresh_context_lengths(self) -> Dict[str, int]:
         """
@@ -305,6 +395,74 @@ class OpenRouterClient:
                 message=f"Failed to retrieve credit information for rate limiting: {str(e)}",
                 code="credits_fetch_error"
             ) from e
+    
+    def _set_rate_limit(self,
+                       endpoint: str,
+                       method: Union[str, Any],
+                       max_requests: int,
+                       time_period: float,
+                       cooldown: Optional[float] = None) -> None:
+        """
+        Set the rate limit for a specific API endpoint and method.
+        
+        This is a protected method that delegates to HTTPManager.set_rate_limit().
+        Use this for fine-grained control over individual endpoint rate limits.
+        
+        Args:
+            endpoint (str): The API endpoint to set rate limit for.
+            method (Union[str, Any]): HTTP method (GET, POST, etc.) or RequestMethod enum.
+            max_requests (int): Maximum number of requests allowed per time period.
+            time_period (float): Time period in seconds for the rate limit.
+            cooldown (Optional[float]): Cooldown period in seconds after hitting the limit.
+            
+        Raises:
+            AttributeError: If the HTTP manager doesn't support rate limiting.
+            ValueError: If invalid rate limit parameters are provided.
+        """
+        self.logger.debug(
+            f"Setting rate limit for {method} {endpoint}: "
+            f"max_requests={max_requests}, time_period={time_period}s"
+        )
+        
+        # Delegate to HTTP manager
+        self.http_manager.set_rate_limit(
+            endpoint=endpoint,
+            method=method,
+            max_requests=max_requests,
+            time_period=time_period,
+            cooldown=cooldown
+        )
+    
+    def _set_global_rate_limit(self,
+                              max_requests: int,
+                              time_period: float,
+                              cooldown: Optional[float] = None) -> None:
+        """
+        Set a global rate limit for all common OpenRouter API endpoints.
+        
+        This is a protected convenience method that applies the same rate limit to all
+        standard endpoints. For fine-grained control, use _set_rate_limit().
+        
+        Args:
+            max_requests (int): Maximum number of requests allowed per time period.
+            time_period (float): Time period in seconds for the rate limit.
+            cooldown (Optional[float]): Cooldown period in seconds after hitting the limit.
+            
+        Example:
+            # Limit to 100 requests per minute with 5 second cooldown
+            client._set_global_rate_limit(100, 60, 5)
+        """
+        self.logger.info(
+            f"Setting global rate limit: max_requests={max_requests}, "
+            f"time_period={time_period}s, cooldown={cooldown}s"
+        )
+        
+        # Delegate to HTTP manager
+        self.http_manager.set_global_rate_limit(
+            max_requests=max_requests,
+            time_period=time_period,
+            cooldown=cooldown
+        )
 
     def close(self) -> None:
         """
@@ -323,7 +481,7 @@ class OpenRouterClient:
         
         # Clear all endpoint instances to release their resources
         for endpoint_name in ['completions', 'chat', 'models', 'generations', 
-                             'credits', 'keys', 'web']:
+                             'credits', 'keys']:
             if hasattr(self, endpoint_name):
                 try:
                     setattr(self, endpoint_name, None)

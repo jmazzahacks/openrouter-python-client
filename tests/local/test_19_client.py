@@ -7,6 +7,26 @@ from openrouter_client.client import OpenRouterClient
 from openrouter_client.exceptions import APIError, AuthenticationError
 
 
+def create_mock_keys_endpoint():
+    """Create a mock KeysEndpoint with get_current method."""
+    mock_keys_endpoint = Mock()
+    mock_keys_instance = Mock()
+    mock_keys_instance.get_current = Mock(return_value={
+        "data": {
+            "label": "test-key",
+            "usage": 0,
+            "limit": None,
+            "is_free_tier": False,
+            "rate_limit": {
+                "requests": 10,
+                "interval": "10s"
+            }
+        }
+    })
+    mock_keys_endpoint.return_value = mock_keys_instance
+    return mock_keys_endpoint
+
+
 @contextmanager
 def mock_all_endpoints():
     """Context manager to mock all endpoint classes to avoid Pydantic validation errors."""
@@ -17,8 +37,7 @@ def mock_all_endpoints():
         ModelsEndpoint=Mock(),
         GenerationsEndpoint=Mock(),
         CreditsEndpoint=Mock(),
-        KeysEndpoint=Mock(),
-        
+        KeysEndpoint=create_mock_keys_endpoint(),
     ):
         yield
 
@@ -55,8 +74,7 @@ class Test_OpenRouterClient_Init_01_NominalBehaviors:
             ModelsEndpoint=Mock(),
             GenerationsEndpoint=Mock(),
             CreditsEndpoint=Mock(),
-            KeysEndpoint=Mock(),
-            
+            KeysEndpoint=create_mock_keys_endpoint(),
         ):
             # Act
             client = OpenRouterClient(
@@ -144,7 +162,7 @@ class Test_OpenRouterClient_Init_03_BoundaryBehaviors:
             ModelsEndpoint=Mock(),
             GenerationsEndpoint=Mock(),
             CreditsEndpoint=Mock(),
-            KeysEndpoint=Mock(),
+            KeysEndpoint=create_mock_keys_endpoint(),
             
         ):
             # Act
@@ -235,6 +253,196 @@ class Test_OpenRouterClient_Init_05_StateTransitionBehaviors:
             assert hasattr(client, 'generations')
             assert hasattr(client, 'credits')
             assert hasattr(client, 'keys')
+
+
+class Test_OpenRouterClient_InitializeRateLimit_01_NominalBehaviors:
+    """Test nominal behaviors for rate limit initialization during client init."""
+    
+    @patch('openrouter_client.client.AuthManager')
+    @patch('openrouter_client.client.HTTPManager')
+    @patch('openrouter_client.client.configure_logging')
+    def test_rate_limit_set_from_api_key_info_during_initialization(
+        self, mock_logging, mock_http_manager, mock_auth_manager
+    ):
+        """Test that rate limit is correctly set from API key info during init."""
+        # Arrange
+        mock_logger = Mock()
+        mock_logging.return_value = mock_logger
+        mock_auth_instance = Mock()
+        mock_auth_manager.return_value = mock_auth_instance
+        mock_http_instance = Mock()
+        mock_http_instance.set_global_rate_limit = Mock()
+        mock_http_manager.return_value = mock_http_instance
+        
+        # Create custom keys endpoint mock with specific rate limit
+        mock_keys_endpoint = Mock()
+        mock_keys_instance = Mock()
+        mock_keys_instance.get_current = Mock(return_value={
+            "data": {
+                "label": "test-key",
+                "usage": 0,
+                "limit": None,
+                "is_free_tier": False,
+                "rate_limit": {
+                    "requests": 20,
+                    "interval": "30s"
+                }
+            }
+        })
+        mock_keys_endpoint.return_value = mock_keys_instance
+        
+        with patch.multiple(
+            'openrouter_client.client',
+            CompletionsEndpoint=Mock(),
+            ChatEndpoint=Mock(),
+            ModelsEndpoint=Mock(),
+            GenerationsEndpoint=Mock(),
+            CreditsEndpoint=Mock(),
+            KeysEndpoint=mock_keys_endpoint,
+        ):
+            # Act
+            client = OpenRouterClient(api_key="test")
+            
+            # Assert
+            mock_keys_instance.get_current.assert_called_once()
+            mock_http_instance.set_global_rate_limit.assert_called_once_with(
+                max_requests=20,
+                time_period=30.0,
+                cooldown=None
+            )
+            mock_logger.info.assert_any_call(
+                "Rate limit initialized from API key: 20 requests per 30s (20 requests per 30.0s)"
+            )
+    
+    @pytest.mark.parametrize("interval,expected_seconds", [
+        ("10s", 10.0),
+        ("5m", 300.0),
+        ("1h", 3600.0),
+        ("2d", 172800.0),
+        ("1.5h", 5400.0),
+        ("30", 30.0),  # No unit defaults to seconds
+    ])
+    @patch('openrouter_client.client.AuthManager')
+    @patch('openrouter_client.client.HTTPManager')
+    @patch('openrouter_client.client.configure_logging')
+    def test_interval_parsing_supports_various_time_units(
+        self, mock_logging, mock_http_manager, mock_auth_manager, interval, expected_seconds
+    ):
+        """Test that interval parsing correctly handles various time units."""
+        # Arrange
+        mock_logger = Mock()
+        mock_logging.return_value = mock_logger
+        mock_auth_instance = Mock()
+        mock_auth_manager.return_value = mock_auth_instance
+        mock_http_instance = Mock()
+        mock_http_instance.set_global_rate_limit = Mock()
+        mock_http_manager.return_value = mock_http_instance
+        
+        # Create custom keys endpoint mock with specific interval
+        mock_keys_endpoint = Mock()
+        mock_keys_instance = Mock()
+        mock_keys_instance.get_current = Mock(return_value={
+            "data": {
+                "label": "test-key",
+                "usage": 0,
+                "limit": None,
+                "is_free_tier": False,
+                "rate_limit": {
+                    "requests": 10,
+                    "interval": interval
+                }
+            }
+        })
+        mock_keys_endpoint.return_value = mock_keys_instance
+        
+        with patch.multiple(
+            'openrouter_client.client',
+            CompletionsEndpoint=Mock(),
+            ChatEndpoint=Mock(),
+            ModelsEndpoint=Mock(),
+            GenerationsEndpoint=Mock(),
+            CreditsEndpoint=Mock(),
+            KeysEndpoint=mock_keys_endpoint,
+        ):
+            # Act
+            client = OpenRouterClient(api_key="test")
+            
+            # Assert
+            mock_http_instance.set_global_rate_limit.assert_called_once_with(
+                max_requests=10,
+                time_period=expected_seconds,
+                cooldown=None
+            )
+
+
+class Test_OpenRouterClient_InitializeRateLimit_02_NegativeBehaviors:
+    """Test negative behaviors for rate limit initialization during client init."""
+    
+    @pytest.mark.parametrize("invalid_response", [
+        # Missing data key
+        {"error": "Invalid response"},
+        # Missing rate_limit in data
+        {"data": {"label": "test-key", "usage": 0}},
+        # Invalid rate_limit structure
+        {"data": {"label": "test-key", "rate_limit": "invalid"}},
+        # Missing requests
+        {"data": {"label": "test-key", "rate_limit": {"interval": "10s"}}},
+        # Missing interval
+        {"data": {"label": "test-key", "rate_limit": {"requests": 10}}},
+        # Invalid interval format
+        {"data": {"label": "test-key", "rate_limit": {"requests": 10, "interval": "invalid"}}},
+        # API call fails
+        Exception("API error"),
+    ])
+    @patch('openrouter_client.client.AuthManager')
+    @patch('openrouter_client.client.HTTPManager')
+    @patch('openrouter_client.client.configure_logging')
+    def test_handles_invalid_or_missing_rate_limit_data_gracefully(
+        self, mock_logging, mock_http_manager, mock_auth_manager, invalid_response
+    ):
+        """Test that initialization continues even with invalid rate limit data."""
+        # Arrange
+        mock_logger = Mock()
+        mock_logging.return_value = mock_logger
+        mock_auth_instance = Mock()
+        mock_auth_manager.return_value = mock_auth_instance
+        mock_http_instance = Mock()
+        mock_http_instance.set_global_rate_limit = Mock()
+        mock_http_manager.return_value = mock_http_instance
+        
+        # Create custom keys endpoint mock
+        mock_keys_endpoint = Mock()
+        mock_keys_instance = Mock()
+        if isinstance(invalid_response, Exception):
+            mock_keys_instance.get_current = Mock(side_effect=invalid_response)
+        else:
+            mock_keys_instance.get_current = Mock(return_value=invalid_response)
+        mock_keys_endpoint.return_value = mock_keys_instance
+        
+        with patch.multiple(
+            'openrouter_client.client',
+            CompletionsEndpoint=Mock(),
+            ChatEndpoint=Mock(),
+            ModelsEndpoint=Mock(),
+            GenerationsEndpoint=Mock(),
+            CreditsEndpoint=Mock(),
+            KeysEndpoint=mock_keys_endpoint,
+        ):
+            # Act
+            client = OpenRouterClient(api_key="test")  # Should not raise
+            
+            # Assert
+            assert client is not None
+            # Rate limit should not be set
+            mock_http_instance.set_global_rate_limit.assert_not_called()
+            # Warning should be logged
+            if isinstance(invalid_response, Exception):
+                mock_logger.warning.assert_any_call(
+                    "Failed to initialize rate limit from API key: API error"
+                )
+            else:
+                # Various warning messages depending on the issue
+                assert mock_logger.warning.called or mock_logger.debug.called
 
 
 class Test_OpenRouterClient_InitializeEndpoints_01_NominalBehaviors:
@@ -1050,7 +1258,7 @@ class Test_OpenRouterClient_Close_02_NegativeBehaviors:
 
         with patch.multiple('openrouter_client.client', CompletionsEndpoint=Mock(), ChatEndpoint=Mock(), ModelsEndpoint=Mock(),
                            GenerationsEndpoint=Mock(), CreditsEndpoint=Mock(),
-                           KeysEndpoint=Mock()):
+                           KeysEndpoint=create_mock_keys_endpoint()):
             client = OpenRouterClient(api_key="test")
 
         if scenario == "already_closed":
@@ -1158,7 +1366,7 @@ class Test_OpenRouterClient_Close_04_ErrorHandlingBehaviors:
 
         with patch.multiple('openrouter_client.client', CompletionsEndpoint=Mock(), ChatEndpoint=Mock(), ModelsEndpoint=Mock(),
                            GenerationsEndpoint=Mock(), CreditsEndpoint=Mock(),
-                           KeysEndpoint=Mock()):
+                           KeysEndpoint=create_mock_keys_endpoint()):
             client = OpenRouterClient(api_key="test")
         
         # Act
@@ -1242,7 +1450,7 @@ class Test_OpenRouterClient_Enter_01_NominalBehaviors:
         # Arrange
         with patch.multiple('openrouter_client.client', CompletionsEndpoint=Mock(), ChatEndpoint=Mock(), ModelsEndpoint=Mock(),
                            GenerationsEndpoint=Mock(), CreditsEndpoint=Mock(),
-                           KeysEndpoint=Mock()):
+                           KeysEndpoint=create_mock_keys_endpoint()):
             client_instance = OpenRouterClient(api_key="test")
         
             # Act
@@ -1272,7 +1480,7 @@ class Test_OpenRouterClient_Exit_01_NominalBehaviors:
         
         with patch.multiple('openrouter_client.client', CompletionsEndpoint=Mock(), ChatEndpoint=Mock(), ModelsEndpoint=Mock(),
                            GenerationsEndpoint=Mock(), CreditsEndpoint=Mock(),
-                           KeysEndpoint=Mock()):
+                           KeysEndpoint=create_mock_keys_endpoint()):
             client = OpenRouterClient(api_key="test")
         
             # Act
@@ -1312,7 +1520,7 @@ class Test_OpenRouterClient_Exit_02_NegativeBehaviors:
         
         with patch.multiple('openrouter_client.client', CompletionsEndpoint=Mock(), ChatEndpoint=Mock(), ModelsEndpoint=Mock(),
                            GenerationsEndpoint=Mock(), CreditsEndpoint=Mock(),
-                           KeysEndpoint=Mock()):
+                           KeysEndpoint=create_mock_keys_endpoint()):
             client = OpenRouterClient(api_key="test")
         
             # Act
@@ -1353,7 +1561,7 @@ class Test_OpenRouterClient_Exit_04_ErrorHandlingBehaviors:
 
         with patch.multiple('openrouter_client.client', CompletionsEndpoint=Mock(), ChatEndpoint=Mock(), ModelsEndpoint=Mock(),
                            GenerationsEndpoint=Mock(), CreditsEndpoint=Mock(),
-                           KeysEndpoint=Mock()):
+                           KeysEndpoint=create_mock_keys_endpoint()):
             client = OpenRouterClient(api_key="test")
         
             # Act
@@ -1413,3 +1621,213 @@ class Test_OpenRouterClient_Exit_05_StateTransitionBehaviors:
             mock_http_instance.close.assert_called_once()
             for attr in endpoint_attributes:
                 assert getattr(client, attr) is None, f"Endpoint {attr} was not nulled on exit"
+
+
+class Test_OpenRouterClient_SetRateLimit_01_NominalBehaviors:
+    """Test nominal behaviors for OpenRouterClient._set_rate_limit method."""
+    
+    @patch('openrouter_client.client.AuthManager')
+    @patch('openrouter_client.client.HTTPManager')
+    @patch('openrouter_client.client.configure_logging')
+    def test_set_rate_limit_delegates_to_http_manager(
+        self, mock_logging, mock_http_manager, mock_auth_manager
+    ):
+        """
+        Test that _set_rate_limit correctly delegates to HTTPManager.
+        
+        Verifies that the client's _set_rate_limit method properly
+        passes parameters to the HTTP manager's set_rate_limit method.
+        """
+        # Arrange
+        mock_logger = Mock()
+        mock_logging.return_value = mock_logger
+        mock_http_instance = Mock()
+        mock_http_instance.set_rate_limit = Mock()
+        mock_http_manager.return_value = mock_http_instance
+        
+        with patch.multiple('openrouter_client.client', CompletionsEndpoint=Mock(), ChatEndpoint=Mock(), ModelsEndpoint=Mock(),
+                           GenerationsEndpoint=Mock(), CreditsEndpoint=Mock(),
+                           KeysEndpoint=create_mock_keys_endpoint()):
+            client = OpenRouterClient(api_key="test")
+        
+            # Act
+            client._set_rate_limit(
+                endpoint="/chat/completions",
+                method="POST",
+                max_requests=20,
+                time_period=60.0,
+                cooldown=5.0
+            )
+            
+            # Assert
+            mock_http_instance.set_rate_limit.assert_called_once_with(
+                endpoint="/chat/completions",
+                method="POST",
+                max_requests=20,
+                time_period=60.0,
+                cooldown=5.0
+            )
+    
+    @patch('openrouter_client.client.AuthManager')
+    @patch('openrouter_client.client.HTTPManager')
+    @patch('openrouter_client.client.configure_logging')
+    def test_set_rate_limit_with_request_method_enum(
+        self, mock_logging, mock_http_manager, mock_auth_manager
+    ):
+        """
+        Test _set_rate_limit with RequestMethod enum.
+        
+        Verifies that the method accepts RequestMethod enum values
+        and passes them through to HTTPManager.
+        """
+        # Arrange
+        mock_logger = Mock()
+        mock_logging.return_value = mock_logger
+        mock_http_instance = Mock()
+        mock_http_instance.set_rate_limit = Mock()
+        mock_http_manager.return_value = mock_http_instance
+        
+        from openrouter_client.types import RequestMethod
+        
+        with patch.multiple('openrouter_client.client', CompletionsEndpoint=Mock(), ChatEndpoint=Mock(), ModelsEndpoint=Mock(),
+                           GenerationsEndpoint=Mock(), CreditsEndpoint=Mock(),
+                           KeysEndpoint=create_mock_keys_endpoint()):
+            client = OpenRouterClient(api_key="test")
+        
+            # Act
+            client._set_rate_limit(
+                endpoint="/models",
+                method=RequestMethod.GET,
+                max_requests=50,
+                time_period=60.0
+            )
+            
+            # Assert
+            mock_http_instance.set_rate_limit.assert_called_once_with(
+                endpoint="/models",
+                method=RequestMethod.GET,
+                max_requests=50,
+                time_period=60.0,
+                cooldown=None
+            )
+
+
+class Test_OpenRouterClient_SetRateLimit_04_ErrorHandlingBehaviors:
+    """Test error handling behaviors for OpenRouterClient._set_rate_limit method."""
+    
+    @patch('openrouter_client.client.AuthManager')
+    @patch('openrouter_client.client.HTTPManager')
+    @patch('openrouter_client.client.configure_logging')
+    def test_set_rate_limit_propagates_http_manager_errors(
+        self, mock_logging, mock_http_manager, mock_auth_manager
+    ):
+        """
+        Test that _set_rate_limit propagates errors from HTTPManager.
+        
+        Verifies that exceptions from HTTPManager.set_rate_limit
+        are properly propagated to the caller.
+        """
+        # Arrange
+        mock_logger = Mock()
+        mock_logging.return_value = mock_logger
+        mock_http_instance = Mock()
+        mock_http_instance.set_rate_limit = Mock(side_effect=AttributeError("Client doesn't support rate limiting"))
+        mock_http_manager.return_value = mock_http_instance
+        
+        with patch.multiple('openrouter_client.client', CompletionsEndpoint=Mock(), ChatEndpoint=Mock(), ModelsEndpoint=Mock(),
+                           GenerationsEndpoint=Mock(), CreditsEndpoint=Mock(),
+                           KeysEndpoint=create_mock_keys_endpoint()):
+            client = OpenRouterClient(api_key="test")
+        
+            # Act & Assert
+            with pytest.raises(AttributeError) as exc_info:
+                client._set_rate_limit(
+                    endpoint="/chat/completions",
+                    method="POST",
+                    max_requests=10,
+                    time_period=60.0
+                )
+            
+            assert "Client doesn't support rate limiting" in str(exc_info.value)
+
+
+class Test_OpenRouterClient_SetGlobalRateLimit_01_NominalBehaviors:
+    """Test nominal behaviors for OpenRouterClient._set_global_rate_limit method."""
+    
+    @patch('openrouter_client.client.AuthManager')
+    @patch('openrouter_client.client.HTTPManager')
+    @patch('openrouter_client.client.configure_logging')
+    def test_set_global_rate_limit_delegates_to_http_manager(
+        self, mock_logging, mock_http_manager, mock_auth_manager
+    ):
+        """
+        Test that _set_global_rate_limit correctly delegates to HTTPManager.
+        
+        Verifies that the client's _set_global_rate_limit method properly
+        passes parameters to the HTTP manager's set_global_rate_limit method.
+        """
+        # Arrange
+        mock_logger = Mock()
+        mock_logging.return_value = mock_logger
+        mock_http_instance = Mock()
+        mock_http_instance.set_global_rate_limit = Mock()
+        mock_http_manager.return_value = mock_http_instance
+        
+        with patch.multiple('openrouter_client.client', CompletionsEndpoint=Mock(), ChatEndpoint=Mock(), ModelsEndpoint=Mock(),
+                           GenerationsEndpoint=Mock(), CreditsEndpoint=Mock(),
+                           KeysEndpoint=create_mock_keys_endpoint()):
+            client = OpenRouterClient(api_key="test")
+        
+            # Reset the mock after initialization (which calls set_global_rate_limit during _initialize_rate_limit)
+            mock_http_instance.set_global_rate_limit.reset_mock()
+            
+            # Act
+            client._set_global_rate_limit(
+                max_requests=30,
+                time_period=60.0,
+                cooldown=10.0
+            )
+            
+            # Assert
+            mock_http_instance.set_global_rate_limit.assert_called_once_with(
+                max_requests=30,
+                time_period=60.0,
+                cooldown=10.0
+            )
+
+
+class Test_OpenRouterClient_SetGlobalRateLimit_04_ErrorHandlingBehaviors:
+    """Test error handling behaviors for OpenRouterClient._set_global_rate_limit method."""
+    
+    @patch('openrouter_client.client.AuthManager')
+    @patch('openrouter_client.client.HTTPManager')
+    @patch('openrouter_client.client.configure_logging')
+    def test_set_global_rate_limit_propagates_http_manager_errors(
+        self, mock_logging, mock_http_manager, mock_auth_manager
+    ):
+        """
+        Test that _set_global_rate_limit propagates errors from HTTPManager.
+        
+        Verifies that exceptions from HTTPManager.set_global_rate_limit
+        are properly propagated to the caller.
+        """
+        # Arrange
+        mock_logger = Mock()
+        mock_logging.return_value = mock_logger
+        mock_http_instance = Mock()
+        mock_http_instance.set_global_rate_limit = Mock(side_effect=ValueError("Invalid rate limit parameters"))
+        mock_http_manager.return_value = mock_http_instance
+        
+        with patch.multiple('openrouter_client.client', CompletionsEndpoint=Mock(), ChatEndpoint=Mock(), ModelsEndpoint=Mock(),
+                           GenerationsEndpoint=Mock(), CreditsEndpoint=Mock(),
+                           KeysEndpoint=create_mock_keys_endpoint()):
+            client = OpenRouterClient(api_key="test")
+        
+            # Act & Assert
+            with pytest.raises(ValueError) as exc_info:
+                client._set_global_rate_limit(
+                    max_requests=-10,  # Invalid value
+                    time_period=60.0
+                )
+            
+            assert "Invalid rate limit parameters" in str(exc_info.value)
