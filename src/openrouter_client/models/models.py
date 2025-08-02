@@ -16,7 +16,7 @@ Exported:
 - ModelEndpointsResponse: Response for model endpoints list
 """
 
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from pydantic import BaseModel, Field
 
@@ -76,11 +76,19 @@ class ModelPricing(BaseModel):
         completion (Optional[str]): Price per completion token in USD.
         request (Optional[str]): Price per request in USD.
         image (Optional[str]): Price per image in USD.
+        web_search (Optional[str]): Price per web search in USD.
+        internal_reasoning (Optional[str]): Price per internal reasoning in USD.
+        input_cache_read (Optional[str]): Price per input cache read in USD.
+        input_cache_write (Optional[str]): Price per input cache write in USD.
     """
     prompt: Optional[str] = Field(None, description="Price per prompt token in USD")
     completion: Optional[str] = Field(None, description="Price per completion token in USD")
     request: Optional[str] = Field(None, description="Price per request in USD")
     image: Optional[str] = Field(None, description="Price per image in USD")
+    web_search: Optional[str] = Field(None, description="Price per web search in USD")
+    internal_reasoning: Optional[str] = Field(None, description="Price per internal reasoning in USD")
+    input_cache_read: Optional[str] = Field(None, description="Price per input cache read in USD")
+    input_cache_write: Optional[str] = Field(None, description="Price per input cache write in USD")
 
 
 class ModelQuantization(BaseModel):
@@ -135,6 +143,36 @@ class ModelProvider(BaseModel):
     data_policy: Optional[ModelDataPolicy] = Field(None, description="Data policy information")
 
 
+class Architecture(BaseModel):
+    """
+    Architecture information for a model.
+    
+    Attributes:
+        input_modalities (List[str]): List of supported input modalities (e.g., ["text", "image"]).
+        output_modalities (List[str]): List of supported output modalities (e.g., ["text"]).
+        tokenizer (Optional[str]): Tokenizer type used by the model (e.g., "GPT").
+        instruct_type (Optional[str]): Type of instruction format supported.
+    """
+    input_modalities: List[str] = Field(..., description="List of supported input modalities (e.g., ['text', 'image'])")
+    output_modalities: List[str] = Field(..., description="List of supported output modalities (e.g., ['text'])")
+    tokenizer: Optional[str] = Field(None, description="Tokenizer type used by the model (e.g., 'GPT')")
+    instruct_type: Optional[str] = Field(None, description="Type of instruction format supported")
+
+
+class TopProvider(BaseModel):
+    """
+    Top provider information for a model.
+    
+    Attributes:
+        is_moderated (bool): Whether the provider is moderated.
+        context_length (Optional[int]): Context length in tokens.
+        max_completion_tokens (Optional[int]): Maximum completion tokens.
+    """
+    is_moderated: bool = Field(..., description="Whether the provider is moderated")
+    context_length: Optional[int] = Field(None, description="Context length in tokens")
+    max_completion_tokens: Optional[int] = Field(None, description="Maximum completion tokens")
+
+
 class Model(BaseModel):
     """
     Model information from the Models API.
@@ -182,19 +220,31 @@ class ModelData(BaseModel):
         name (str): Human-readable model name.
         created (int): Unix timestamp of model creation date.
         description (Optional[str]): Optional description of the model.
+        architecture (Optional[Architecture]): Architecture information including input/output modalities.
+        top_provider (Optional[TopProvider]): Top provider information.
+        pricing (ModelPricing): Pricing information for the model.
+        canonical_slug (Optional[str]): Canonical slug for the model.
         context_length (int): Maximum context length in tokens.
+        hugging_face_id (Optional[str]): Hugging Face model ID.
+        per_request_limits (Dict[str, Any]): Per-request limits.
+        supported_parameters (List[str]): List of supported parameters.
         max_completion_tokens (Optional[int]): Optional maximum tokens in completions.
         quantization (Optional[str]): Optional model quantization level (e.g., "fp16").
-        pricing (ModelPricing): Pricing information for the model.
     """
     id: str = Field(..., description="Model identifier (provider/model-name)")
     name: str = Field(..., description="Human-readable model name")
     created: int = Field(..., description="Unix timestamp of model creation date")
     description: Optional[str] = Field(None, description="Optional description of the model")
+    architecture: Optional[Architecture] = Field(None, description="Architecture information including input/output modalities")
+    top_provider: Optional[TopProvider] = Field(None, description="Top provider information")
+    pricing: ModelPricing = Field(..., description="Pricing information for the model")
+    canonical_slug: Optional[str] = Field(None, description="Canonical slug for the model")
     context_length: int = Field(..., description="Maximum context length in tokens")
+    hugging_face_id: Optional[str] = Field(None, description="Hugging Face model ID")
+    per_request_limits: Optional[Dict[str, Any]] = Field(None, description="Per-request limits")
+    supported_parameters: List[str] = Field(default_factory=list, description="List of supported parameters")
     max_completion_tokens: Optional[int] = Field(None, description="Optional maximum tokens in completions")
     quantization: Optional[str] = Field(None, description="Optional model quantization level (e.g., \"fp16\")")
-    pricing: ModelPricing = Field(..., description="Pricing information for the model")
 
 
 class ModelsResponse(BaseModel):
