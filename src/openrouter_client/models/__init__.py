@@ -98,6 +98,10 @@ from .chat import (
     ToolChoice,
 )
 
+# Simple API models
+from .attachment import Attachment
+from .llm import LLMModel, get_model
+
 __all__ = [
     # Core models
     "FunctionDefinition",
@@ -174,4 +178,9 @@ __all__ = [
     "StructuredToolResult",
     "FunctionToolChoice",
     "ToolChoice",
+    
+    # Simple API
+    "Attachment",
+    "LLMModel",
+    "get_model",
 ]
