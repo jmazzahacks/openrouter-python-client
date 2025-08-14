@@ -216,12 +216,25 @@ class HTTPManager:
                 elif 400 <= response.status_code < 500:
                     # Client error
                     error_detail = {}
+                    error_message = f"API Error: {response.status_code}"
+                    
                     try:
-                        error_detail = response.json()
-                        error_message = error_detail.get('message', f"API Error: {response.status_code}")
+                        response_data = response.json()
+                        
+                        # Check if response has OpenRouter's error structure
+                        if 'error' in response_data:
+                            error_info = response_data['error']
+                            error_message = error_info.get('message', error_message)
+                            error_detail = error_info
+                        else:
+                            # Fallback to using the whole response as error detail
+                            error_detail = response_data
+                            error_message = response_data.get('message', error_message)
+                            
                     except Exception:
                         # If JSON parsing fails, use the raw response text
-                        error_message = f"API Error {response.status_code}: {response.text}"
+                        if response.text.strip():
+                            error_message = f"API Error {response.status_code}: {response.text}"
                         error_detail = {'message': error_message}
                     
                     # Log the full error for debugging
