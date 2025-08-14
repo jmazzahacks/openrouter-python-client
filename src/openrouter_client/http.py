@@ -218,14 +218,21 @@ class HTTPManager:
                     error_detail = {}
                     try:
                         error_detail = response.json()
+                        error_message = error_detail.get('message', f"API Error: {response.status_code}")
                     except Exception:
-                        error_detail = {'message': f"API Error: {response.status_code}"}
+                        # If JSON parsing fails, use the raw response text
+                        error_message = f"API Error {response.status_code}: {response.text}"
+                        error_detail = {'message': error_message}
+                    
+                    # Log the full error for debugging
+                    self.logger.error(f"API Error {response.status_code}: {error_message}")
+                    
                     raise APIError(
-                        message=error_detail.get('message', f"API Error: {response.status_code}"),
+                        message=error_message,
                         code=error_detail.get('code', response.status_code),
                         param=error_detail.get('param'),
                         type=error_detail.get('type'),
-                        status_code=response.status_code,  # Add this line
+                        status_code=response.status_code,
                         response=response
                     )
                 elif 500 <= response.status_code < 600:
