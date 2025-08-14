@@ -17,6 +17,19 @@ from typing import Optional, Union, Dict
 DEFAULT_LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
 
+def get_logger(name: str) -> logging.Logger:
+    """
+    Get a standard logger using Python's logging hierarchy.
+    
+    Args:
+        name (str): Logger name
+        
+    Returns:
+        logging.Logger: Standard Python logger
+    """
+    return logging.getLogger(name)
+
+
 def configure_logging(
     level: Union[int, str] = logging.INFO,
     format: str = DEFAULT_LOG_FORMAT,
