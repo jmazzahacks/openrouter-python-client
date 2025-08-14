@@ -72,6 +72,21 @@ class HTTPManager:
             self.logger.debug("Created SmartSurgeClient with rate limiting")
         
         self.logger.info(f"HTTP manager initialized with base_url={base_url}")
+        
+        # Workaround: Configure smartsurge logging to respect root logger level
+        # SmartSurge doesn't follow proper logging hierarchy and explicitly sets
+        # smartsurge.client to INFO level after initialization, overriding user's settings
+        root_level = logging.getLogger().getEffectiveLevel()
+        
+        # Set parent smartsurge logger
+        smartsurge_logger = logging.getLogger('smartsurge')
+        if smartsurge_logger.level == logging.NOTSET:
+            smartsurge_logger.setLevel(root_level)
+            
+        # Workaround: SmartSurge also explicitly sets smartsurge.client to INFO, so fix that too
+        smartsurge_client_logger = logging.getLogger('smartsurge.client')
+        if smartsurge_client_logger.level <= logging.INFO:  # Only if not set to WARNING+ by user
+            smartsurge_client_logger.setLevel(root_level)
 
     def request(self,
                 method: RequestMethod,
