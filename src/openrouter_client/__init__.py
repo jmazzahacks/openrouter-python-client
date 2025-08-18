@@ -56,6 +56,7 @@ from .logging import configure_logging
 from .auth import AuthManager
 from .http import HTTPManager
 from .types import RequestMethod
+from .models import Attachment, LLMModel, get_model
 from .tools import (
     tool,
     build_tool_definition,
@@ -81,6 +82,11 @@ __all__ = [
     'AuthManager',
     'HTTPManager',
     'RequestMethod',
+    
+    # Simple API
+    'Attachment',
+    'LLMModel',
+    'get_model',
     
     # Tool utilities
     'tool',

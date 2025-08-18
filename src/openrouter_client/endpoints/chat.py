@@ -524,13 +524,34 @@ class ChatEndpoint(BaseEndpoint):
                 json=data  # Use the single data dictionary
             )
             
-            # Parse and return ChatCompletionResponse model
+            # Parse response
+            response_data = response.json()
+            
+            # Check for API error responses first
+            if 'error' in response_data:
+                error_info = response_data['error']
+                error_msg = error_info.get('message', 'Unknown API error')
+                error_type = error_info.get('type', 'api_error')
+                self.logger.error(f"OpenRouter API error ({error_type}): {error_msg}")
+                
+                # Import here to avoid circular imports
+                from ..exceptions import APIError, RateLimitExceeded, AuthenticationError
+                
+                # Raise appropriate exception based on error type
+                if 'rate limit' in error_msg.lower() or error_type == 'rate_limit_exceeded':
+                    raise RateLimitExceeded(error_msg)
+                elif 'authentication' in error_msg.lower() or error_type == 'authentication_error':
+                    raise AuthenticationError(error_msg)
+                else:
+                    raise APIError(error_msg)
+            
+            # Parse successful response
             try:
-                return ChatCompletionResponse.model_validate(response.json())
+                return ChatCompletionResponse.model_validate(response_data)
             except Exception as e:
                 self.logger.warning(f"Failed to parse chat completion response: {e}")
                 # Fall back to raw response if parsing fails
-                return response.json()
+                return response_data
     
     def resume_stream(self, state_file: str) -> Iterator[ChatCompletionStreamResponse]:
         """

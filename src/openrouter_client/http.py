@@ -216,16 +216,36 @@ class HTTPManager:
                 elif 400 <= response.status_code < 500:
                     # Client error
                     error_detail = {}
+                    error_message = f"API Error: {response.status_code}"
+                    
                     try:
-                        error_detail = response.json()
+                        response_data = response.json()
+                        
+                        # Check if response has OpenRouter's error structure
+                        if 'error' in response_data:
+                            error_info = response_data['error']
+                            error_message = error_info.get('message', error_message)
+                            error_detail = error_info
+                        else:
+                            # Fallback to using the whole response as error detail
+                            error_detail = response_data
+                            error_message = response_data.get('message', error_message)
+                            
                     except Exception:
-                        error_detail = {'message': f"API Error: {response.status_code}"}
+                        # If JSON parsing fails, use the raw response text
+                        if response.text.strip():
+                            error_message = f"API Error {response.status_code}: {response.text}"
+                        error_detail = {'message': error_message}
+                    
+                    # Log the full error for debugging
+                    self.logger.error(f"API Error {response.status_code}: {error_message}")
+                    
                     raise APIError(
-                        message=error_detail.get('message', f"API Error: {response.status_code}"),
+                        message=error_message,
                         code=error_detail.get('code', response.status_code),
                         param=error_detail.get('param'),
                         type=error_detail.get('type'),
-                        status_code=response.status_code,  # Add this line
+                        status_code=response.status_code,
                         response=response
                     )
                 elif 500 <= response.status_code < 600:

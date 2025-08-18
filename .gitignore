@@ -18,3 +18,6 @@ openrouter-client.md
 test_imports.py
 future_todos.txt
 *.json
+bin/
+lib/
+pyvenv.cfg
