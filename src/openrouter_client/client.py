@@ -51,7 +51,6 @@ from typing import Dict, Optional, Any, Union
 
 from .auth import AuthManager, SecretsManager
 from .http import HTTPManager
-from .logging import configure_logging
 from .endpoints.completions import CompletionsEndpoint
 from .endpoints.chat import ChatEndpoint
 from .endpoints.models import ModelsEndpoint
@@ -102,9 +101,8 @@ class OpenRouterClient:
         Raises:
             AuthenticationError: If no valid API key is available.
         """
-        # Create and configure logger for this client instance
-        log_level = kwargs.get('log_level', logging.INFO)
-        self.logger = configure_logging(level=log_level)
+        # Create logger for this client instance using standard Python logging
+        self.logger = logging.getLogger("openrouter_client")
         
         try:
             # Initialize auth_manager with provided credentials
