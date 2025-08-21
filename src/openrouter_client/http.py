@@ -241,6 +241,16 @@ class HTTPManager:
                             error_info = response_data['error']
                             error_message = error_info.get('message', error_message)
                             error_detail = error_info
+                        # Check for other common error formats
+                        elif 'message' in response_data:
+                            error_message = response_data['message']
+                            error_detail = response_data
+                        elif 'detail' in response_data:
+                            error_message = response_data['detail']
+                            error_detail = response_data
+                        elif 'reason' in response_data:
+                            error_message = response_data['reason']
+                            error_detail = response_data
                         else:
                             # Fallback to using the whole response as error detail
                             error_detail = response_data
@@ -252,8 +262,43 @@ class HTTPManager:
                             error_message = f"API Error {response.status_code}: {response.text}"
                         error_detail = {'message': error_message}
                     
-                    # Log the full error for debugging
+                    # Enhanced logging with full error details for debugging
+                    # Log the main error message
                     self.logger.error(f"API Error {response.status_code}: {error_message}")
+                    
+                    if error_detail and len(error_detail) > 1:  # More than just the message
+                        # Pretty print the error details for better readability
+                        try:
+                            import json
+                            # Handle nested JSON strings in metadata (like the 'raw' field)
+                            formatted_error_detail = {}
+                            for key, value in error_detail.items():
+                                if isinstance(value, dict):
+                                    formatted_error_detail[key] = {}
+                                    for sub_key, sub_value in value.items():
+                                        if isinstance(sub_value, str) and sub_value.startswith('{') and sub_value.endswith('}'):
+                                            try:
+                                                # Try to parse and pretty-print nested JSON strings
+                                                parsed_sub = json.loads(sub_value)
+                                                formatted_error_detail[key][sub_key] = parsed_sub
+                                            except:
+                                                formatted_error_detail[key][sub_key] = sub_value
+                                        else:
+                                            formatted_error_detail[key][sub_key] = sub_value
+                                else:
+                                    formatted_error_detail[key] = value
+                            
+                            formatted_details = json.dumps(formatted_error_detail, indent=2, ensure_ascii=False)
+                            self.logger.error("Error Details:")
+                            for line in formatted_details.split('\n'):
+                                if line.strip():
+                                    self.logger.error(f"  {line}")
+                        except Exception:
+                            # Fallback to simple logging if JSON formatting fails
+                            self.logger.error(f"Error Details: {error_detail}")
+                    
+                    # Add a separator to make it clear this is one complete error
+                    self.logger.error("--- End of API Error ---")
                     
                     raise APIError(
                         message=error_message,

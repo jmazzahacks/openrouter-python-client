@@ -319,6 +319,118 @@ def demonstrate_logging_for_debugging():
     configure_logging(level=logging.WARNING)
     print("Logging level reset to WARNING")
 
+def demonstrate_enhanced_error_details():
+    """Demonstrate the enhanced error handling with detailed information."""
+    print("\n=== Enhanced Error Details ===")
+    
+    api_key = os.environ.get("OPENROUTER_API_KEY", "your-api-key-here")
+    client = OpenRouterClient(api_key=api_key)
+    
+    try:
+        # Try to use a model that might have specific requirements or restrictions
+        response = client.chat.create(
+            model="meta-llama/llama-2-70b-chat",  # This might have specific requirements
+            messages=[
+                {"role": "user", "content": "Hello!"}
+            ],
+            max_tokens=100
+        )
+        print(f"Success: {response.choices[0].message.content}")
+        
+    except Exception as e:
+        print("=" * 60)
+        print("ENHANCED ERROR HANDLING DEMONSTRATION")
+        print("=" * 60)
+        
+        # Check if this is an APIError with enhanced details
+        if hasattr(e, 'get_detailed_error_info'):
+            print("Enhanced Error Information Available!")
+            print("\n1. Basic Error Details:")
+            print(f"   Status Code: {getattr(e, 'status_code', 'N/A')}")
+            print(f"   Error Message: {getattr(e, 'message', str(e))}")
+            
+            print("\n2. Comprehensive Error Summary:")
+            print(e.get_detailed_error_info())
+            
+            print("\n3. Structured Error Details:")
+            if hasattr(e, 'details') and e.details:
+                for key, value in e.details.items():
+                    if value is not None:
+                        print(f"   {key}: {value}")
+            
+            print("\n4. Raw Response Information:")
+            if hasattr(e, 'response') and e.response:
+                if hasattr(e.response, 'headers'):
+                    print(f"   Response Headers: {dict(e.response.headers)}")
+                if hasattr(e.response, 'text') and e.response.text:
+                    print(f"   Response Text: {e.response.text}")
+        else:
+            print(f"Standard error: {e}")
+            print("This error doesn't have enhanced details available")
+
+def demonstrate_provider_error_debugging():
+    """Demonstrate debugging provider-specific errors with enhanced information."""
+    print("\n=== Provider Error Debugging ===")
+    
+    api_key = os.environ.get("OPENROUTER_API_KEY", "your-api-key-here")
+    client = OpenRouterClient(api_key=api_key)
+    
+    # Test cases that might trigger different types of provider errors
+    test_cases = [
+        {
+            "name": "Model with specific requirements",
+            "model": "meta-llama/llama-2-70b-chat",
+            "description": "Testing model that might have specific requirements"
+        },
+        {
+            "name": "Invalid model name",
+            "model": "invalid-provider/invalid-model",
+            "description": "Testing completely invalid model name"
+        },
+        {
+            "name": "Model with specific parameters",
+            "model": "anthropic/claude-3-opus-20240229",
+            "description": "Testing model that might have specific parameter requirements"
+        }
+    ]
+    
+    for test_case in test_cases:
+        print(f"\n--- Testing: {test_case['name']} ---")
+        print(f"Description: {test_case['description']}")
+        
+        try:
+            response = client.chat.create(
+                model=test_case['model'],
+                messages=[
+                    {"role": "user", "content": "Hello!"}
+                ],
+                max_tokens=100
+            )
+            print(f"✅ Success: {response.choices[0].message.content[:50]}...")
+            
+        except Exception as e:
+            print(f"❌ Error: {type(e).__name__}")
+            
+            # Use enhanced error handling if available
+            if hasattr(e, 'get_detailed_error_info'):
+                print("\nDetailed Error Information:")
+                print(e.get_detailed_error_info())
+                
+                # Check for provider-specific error patterns
+                if hasattr(e, 'details') and e.details:
+                    if any(key in str(e.details).lower() for key in ['provider', 'model', 'requirement', 'restriction']):
+                        print("\n🔍 This appears to be a provider-specific error.")
+                        print("   Check the model requirements or try a different model.")
+                    
+                    if 'type' in e.details:
+                        print(f"   Error Type: {e.details['type']}")
+                    if 'code' in e.details:
+                        print(f"   Error Code: {e.details['code']}")
+            else:
+                print(f"   Standard error: {e}")
+        
+        print("-" * 50)
+
 if __name__ == "__main__":
     main()
     # Uncomment to run specific error handling demonstrations
@@ -328,3 +440,12 @@ if __name__ == "__main__":
     # demonstrate_network_errors()
     # demonstrate_comprehensive_error_handler()
     # demonstrate_logging_for_debugging()
+    # demonstrate_enhanced_error_details()
+    # demonstrate_provider_error_debugging()
+    
+    # Run the enhanced error handling demonstrations by default
+    print("\n" + "="*60)
+    print("RUNNING ENHANCED ERROR HANDLING DEMONSTRATIONS")
+    print("="*60)
+    demonstrate_enhanced_error_details()
+    demonstrate_provider_error_debugging()
