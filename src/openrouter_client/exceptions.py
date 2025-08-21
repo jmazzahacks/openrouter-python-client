@@ -83,6 +83,92 @@ class APIError(OpenRouterError):
                 self.details = {'json_error': str(e)}
             except Exception as e:
                 self.details = {'parse_error': str(e)}
+    
+    def __str__(self):
+        """Enhanced string representation with more error details."""
+        base_msg = f"API Error {self.status_code}: {self.message}"
+        
+        # Add additional details if available
+        if self.details:
+            detail_parts = []
+            for key, value in self.details.items():
+                if key not in ['message', 'json_error', 'parse_error'] and value is not None:
+                    # Handle nested structures more elegantly
+                    if isinstance(value, dict) and len(str(value)) > 100:
+                        # For long nested structures, just show the key and type
+                        detail_parts.append(f"{key}: <{type(value).__name__} with {len(value)} items>")
+                    elif isinstance(value, str) and len(value) > 100:
+                        # For long strings, truncate and show length
+                        detail_parts.append(f"{key}: {value[:100]}... (truncated, {len(value)} chars)")
+                    else:
+                        detail_parts.append(f"{key}: {value}")
+            
+            if detail_parts:
+                base_msg += f" | Details: {'; '.join(detail_parts)}"
+        
+        return base_msg
+    
+    def __repr__(self):
+        """Detailed representation for debugging."""
+        return f"APIError(message='{self.message}', status_code={self.status_code}, details={self.details})"
+    
+    def get_detailed_error_info(self) -> str:
+        """
+        Get a comprehensive error summary for debugging.
+        
+        Returns:
+            str: Detailed error information including status code, message, and all available details.
+        """
+        lines = [f"API Error {self.status_code}: {self.message}"]
+        
+        if self.details:
+            lines.append("Error Details:")
+            for key, value in self.details.items():
+                if value is not None:
+                    if isinstance(value, dict):
+                        # Pretty print dictionaries
+                        try:
+                            import json
+                            formatted_value = json.dumps(value, indent=2, ensure_ascii=False)
+                            lines.append(f"  {key}:")
+                            for line in formatted_value.split('\n'):
+                                if line.strip():
+                                    lines.append(f"    {line}")
+                        except Exception:
+                            lines.append(f"  {key}: {value}")
+                    elif isinstance(value, str) and ('\n' in value or len(value) > 100):
+                        # Handle multiline strings and long strings
+                        lines.append(f"  {key}:")
+                        if len(value) > 100:
+                            lines.append(f"    {value[:100]}... (truncated, {len(value)} chars)")
+                        else:
+                            for line in value.split('\n'):
+                                if line.strip():
+                                    lines.append(f"    {line}")
+                    else:
+                        lines.append(f"  {key}: {value}")
+        
+        if self.response and hasattr(self.response, 'text') and self.response.text.strip():
+            lines.append("Raw Response:")
+            try:
+                # Try to parse and pretty-print as JSON
+                import json
+                parsed_response = json.loads(self.response.text)
+                formatted_response = json.dumps(parsed_response, indent=2, ensure_ascii=False)
+                for line in formatted_response.split('\n'):
+                    if line.strip():
+                        lines.append(f"  {line}")
+            except Exception:
+                # If not valid JSON, format as plain text
+                raw_text = self.response.text.strip()
+                if '\n' in raw_text:
+                    for line in raw_text.split('\n'):
+                        if line.strip():
+                            lines.append(f"  {line}")
+                else:
+                    lines.append(f"  {raw_text}")
+        
+        return "\n".join(lines)
 
 
 
