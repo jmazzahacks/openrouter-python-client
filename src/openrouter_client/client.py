@@ -261,6 +261,11 @@ class OpenRouterClient:
                 self.logger.warning("Missing requests or interval in rate_limit")
                 return
             
+            # Handle special case where requests = -1 (unlimited/no limit)
+            if int(requests) <= 0:
+                self.logger.debug(f"API returned unlimited rate limit (requests={requests}), skipping rate limit configuration")
+                return
+            
             # Convert interval to seconds
             try:
                 time_period = self._parse_interval_to_seconds(interval)
