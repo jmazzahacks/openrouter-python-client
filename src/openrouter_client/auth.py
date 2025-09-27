@@ -173,18 +173,10 @@ class AuthManager:
             if self.secrets_manager is None:
                 self.secrets_manager = EnvironmentSecretsManager()
             
-            # Try to retrieve provisioning API key from secrets manager
-            try:
-                self.logger.debug("Attempting to retrieve provisioning API key from secrets manager")
-                key_bytes = self.secrets_manager.get_key("OPENROUTER_PROVISIONING_API_KEY")
-                provisioning_api_key = key_bytes.decode('utf-8')
-                self.logger.debug("Successfully retrieved provisioning API key from secrets manager")
-            except Exception as e:
-                self.logger.warning(f"Failed to retrieve provisioning API key from secrets manager: {str(e)}")
-            
-            # If still None, fall back to environment variable
+            # Check for provisioning API key in environment (optional)
+            provisioning_api_key = os.environ.get("OPENROUTER_PROVISIONING_API_KEY", "")
             if not provisioning_api_key:
-                provisioning_api_key = os.environ.get("OPENROUTER_PROVISIONING_API_KEY", "")
+                self.logger.debug("Provisioning API key not found in environment (optional)")
         
         # Securely store the provisioning API key if PyNaCl is available, otherwise store as plaintext
         if NACL_AVAILABLE and self._secure_box is not None and provisioning_api_key:
