@@ -5,9 +5,73 @@ Simplified LLM-style API for OpenRouter Client.
 import json
 from typing import List, Optional, Dict, Any, Union, TYPE_CHECKING
 from .attachment import Attachment
+from ..exceptions import APIError
 
 if TYPE_CHECKING:
     from ..client import OpenRouterClient
+
+
+def _parse_schema_response(content: Any, schema: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Parse and validate response content when a schema is provided.
+
+    Guarantees that when a schema is provided, the return value is always
+    a dict. Raises APIError with clear messages if validation fails.
+
+    Args:
+        content: Response content (str or dict)
+        schema: The JSON schema that was provided
+
+    Returns:
+        Dict[str, Any]: Parsed and validated response as a dict
+
+    Raises:
+        APIError: If content is not valid JSON or doesn't match schema expectations
+    """
+    # If content is already a dict, return it
+    if isinstance(content, dict):
+        return content
+
+    # If content is a string, try to parse as JSON
+    if isinstance(content, str):
+        # Check for empty or whitespace-only response
+        if not content.strip():
+            raise APIError(
+                message="Model returned empty response when schema was provided. "
+                        "Expected valid JSON matching the schema.",
+                status_code=422,
+                details={"schema": schema, "response": content}
+            )
+
+        try:
+            parsed = json.loads(content)
+
+            # Ensure parsed result is a dict (not array, string, etc.)
+            if not isinstance(parsed, dict):
+                raise APIError(
+                    message=f"Model returned JSON of type '{type(parsed).__name__}' "
+                            f"when schema requires an object (dict). Response: {content[:200]}",
+                    status_code=422,
+                    details={"schema": schema, "response": content, "parsed_type": type(parsed).__name__}
+                )
+
+            return parsed
+
+        except json.JSONDecodeError as e:
+            raise APIError(
+                message=f"Model returned invalid JSON when schema was provided. "
+                        f"JSON parse error: {str(e)}. Response: {content[:200]}",
+                status_code=422,
+                details={"schema": schema, "response": content, "parse_error": str(e)}
+            )
+
+    # Unexpected content type
+    raise APIError(
+        message=f"Model returned unexpected content type '{type(content).__name__}' "
+                f"when schema was provided. Expected JSON string or dict.",
+        status_code=422,
+        details={"schema": schema, "content_type": type(content).__name__}
+    )
 
 
 class LLMModel:
@@ -18,8 +82,8 @@ class LLMModel:
         self.client = client
     
     def prompt(
-        self, 
-        text: str, 
+        self,
+        text: str,
         system: Optional[str] = None,
         attachments: Optional[List[Attachment]] = None,
         schema: Optional[Dict[str, Any]] = None,
@@ -27,17 +91,22 @@ class LLMModel:
     ) -> Union[str, Dict[str, Any]]:
         """
         Send a prompt with optional system message, attachments, and structured output.
-        
+
         Args:
             text: The user prompt text
             system: Optional system prompt to set context/behavior
             attachments: Optional list of file attachments
             schema: Optional JSON schema for structured output
             **kwargs: Additional parameters passed to chat.create()
-            
+
         Returns:
             str: Response content if no schema provided
-            Dict[str, Any]: Parsed JSON response if schema provided
+            Dict[str, Any]: Parsed and validated JSON response if schema provided.
+                           GUARANTEED to be a dict, never a string.
+
+        Raises:
+            APIError: If schema is provided but model returns invalid JSON
+                     or non-dict response
         """
         # Build messages array
         messages = []
@@ -73,17 +142,13 @@ class LLMModel:
             }
         
         response = self.client.chat.create(**chat_params)
-        
+
         content = response.choices[0].message.content
-        
-        # Parse JSON if schema was provided
+
+        # Parse and validate JSON if schema was provided
         if schema:
-            try:
-                return json.loads(content)
-            except json.JSONDecodeError:
-                # Fallback to raw content if JSON parsing fails
-                return content
-        
+            return _parse_schema_response(content, schema)
+
         return content
     
     def conversation(self, system: Optional[str] = None) -> "Conversation":
@@ -125,16 +190,21 @@ class Conversation:
     ) -> Union[str, Dict[str, Any]]:
         """
         Send a prompt within this conversation context.
-        
+
         Args:
             text: The user prompt text
             attachments: Optional list of file attachments
             schema: Optional JSON schema for structured output
             **kwargs: Additional parameters passed to chat.create()
-            
+
         Returns:
             str: Response content if no schema provided
-            Dict[str, Any]: Parsed JSON response if schema provided
+            Dict[str, Any]: Parsed and validated JSON response if schema provided.
+                           GUARANTEED to be a dict, never a string.
+
+        Raises:
+            APIError: If schema is provided but model returns invalid JSON
+                     or non-dict response
         """
         # Build user message content
         content = [{"type": "text", "text": text}]
@@ -164,20 +234,16 @@ class Conversation:
             }
         
         response = self.client.chat.create(**chat_params)
-        
+
         response_content = response.choices[0].message.content
-        
+
         # Add assistant response to conversation history
         self.messages.append({"role": "assistant", "content": response_content})
-        
-        # Parse JSON if schema was provided
+
+        # Parse and validate JSON if schema was provided
         if schema:
-            try:
-                return json.loads(response_content)
-            except json.JSONDecodeError:
-                # Fallback to raw content if JSON parsing fails
-                return response_content
-        
+            return _parse_schema_response(response_content, schema)
+
         return response_content
     
     def get_message_count(self) -> int:
