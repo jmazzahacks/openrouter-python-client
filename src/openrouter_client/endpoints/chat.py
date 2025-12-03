@@ -66,7 +66,7 @@ class ChatEndpoint(BaseEndpoint):
             http_manager (HTTPManager): HTTP communication manager.
         """
         super().__init__(auth_manager, http_manager, 'chat/completions')
-        self.logger.info(f"Initialized chat completions endpoint handler")
+        self.logger.debug("Initialized chat completions endpoint handler")
     
     def _parse_streaming_response(self, response_iterator: Iterator[Dict[str, Any]]) -> Iterator[ChatCompletionStreamResponse]:
         """

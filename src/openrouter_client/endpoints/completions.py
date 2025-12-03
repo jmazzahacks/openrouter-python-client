@@ -44,7 +44,7 @@ class CompletionsEndpoint(BaseEndpoint):
             http_manager (HTTPManager): HTTP communication manager.
         """
         super().__init__(auth_manager, http_manager, 'completions')
-        self.logger.info(f"Initialized completions endpoint handler")
+        self.logger.debug("Initialized completions endpoint handler")
     
     def _parse_streaming_response(self, response_iterator: Iterator[Dict[str, Any]]) -> Iterator[CompletionsStreamResponse]:
         """

@@ -140,7 +140,7 @@ class OpenRouterClient:
             # Set rate limit from API key information
             self._initialize_rate_limit()
             
-            self.logger.info(
+            self.logger.debug(
                 f"OpenRouterClient initialized successfully with base_url={base_url}, "
                 f"provisioning_key={'available' if provisioning_api_key else 'not available'}"
             )

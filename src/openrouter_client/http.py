@@ -71,7 +71,7 @@ class HTTPManager:
             )
             self.logger.debug("Created SmartSurgeClient with rate limiting")
         
-        self.logger.info(f"HTTP manager initialized with base_url={base_url}")
+        self.logger.debug(f"HTTP manager initialized with base_url={base_url}")
         
         # Workaround: Configure smartsurge logging to respect root logger level
         # SmartSurge doesn't follow proper logging hierarchy and explicitly sets
