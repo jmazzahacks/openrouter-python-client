@@ -56,7 +56,13 @@ from .logging import configure_logging
 from .auth import AuthManager
 from .http import HTTPManager
 from .types import RequestMethod
-from .models import Attachment, LLMModel, get_model
+from .models import (
+    Attachment,
+    LLMModel,
+    get_model,
+    build_json_schema_response_format,
+    parse_schema_response,
+)
 from .tools import (
     tool,
     build_tool_definition,
@@ -87,7 +93,9 @@ __all__ = [
     'Attachment',
     'LLMModel',
     'get_model',
-    
+    'build_json_schema_response_format',
+    'parse_schema_response',
+
     # Tool utilities
     'tool',
     'build_tool_definition',

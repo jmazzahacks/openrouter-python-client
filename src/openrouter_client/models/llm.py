@@ -11,7 +11,30 @@ if TYPE_CHECKING:
     from ..client import OpenRouterClient
 
 
-def _parse_schema_response(content: Any, schema: Dict[str, Any]) -> Dict[str, Any]:
+def build_json_schema_response_format(
+    schema: Dict[str, Any],
+    name: str = "response_schema",
+) -> Dict[str, Any]:
+    """
+    Build the OpenRouter ``response_format`` block for structured JSON output.
+
+    Args:
+        schema: The JSON schema the model's output must conform to.
+        name: Schema name reported to the API (default: "response_schema").
+
+    Returns:
+        Dict[str, Any]: A ``response_format`` dict suitable for chat.create().
+    """
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": name,
+            "schema": schema,
+        },
+    }
+
+
+def parse_schema_response(content: Any, schema: Dict[str, Any]) -> Dict[str, Any]:
     """
     Parse and validate response content when a schema is provided.
 
@@ -133,13 +156,7 @@ class LLMModel:
         
         # Add structured output if schema provided
         if schema:
-            chat_params["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "response_schema",
-                    "schema": schema
-                }
-            }
+            chat_params["response_format"] = build_json_schema_response_format(schema)
         
         response = self.client.chat.create(**chat_params)
 
@@ -147,7 +164,7 @@ class LLMModel:
 
         # Parse and validate JSON if schema was provided
         if schema:
-            return _parse_schema_response(content, schema)
+            return parse_schema_response(content, schema)
 
         return content
     
@@ -225,13 +242,7 @@ class Conversation:
         
         # Add structured output if schema provided
         if schema:
-            chat_params["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "response_schema",
-                    "schema": schema
-                }
-            }
+            chat_params["response_format"] = build_json_schema_response_format(schema)
         
         response = self.client.chat.create(**chat_params)
 
@@ -242,7 +253,7 @@ class Conversation:
 
         # Parse and validate JSON if schema was provided
         if schema:
-            return _parse_schema_response(response_content, schema)
+            return parse_schema_response(response_content, schema)
 
         return response_content
     

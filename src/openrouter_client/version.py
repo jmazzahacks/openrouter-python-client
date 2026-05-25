@@ -8,7 +8,7 @@ Exported:
 """
 
 # Package version
-__version__ = "0.0.1"
+__version__ = "0.0.18"
 
 # Minimum supported API version
 __api_version__ = "v1"
@@ -18,5 +18,5 @@ VERSION_INFO = {
     "package": __version__,
     "api": __api_version__,
     "python": ">=3.9",
-    "smartsurge": ">=0.0.4",
+    "smartsurge": ">=0.0.7",
 }
