@@ -11,6 +11,7 @@ AGENT.md
 api_reference.md
 api_streaming.md
 CLAUDE.md
+.mcp.json
 file_skeletons.md
 layout.md
 openrouter_api_spec.md
