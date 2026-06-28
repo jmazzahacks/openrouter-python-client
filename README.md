@@ -85,6 +85,50 @@ rate_limits = client.calculate_rate_limits()
 print(f"Recommended: {rate_limits['requests']} requests per {rate_limits['period']} seconds")
 ```
 
+### Retrying 429s with Backoff (opt-in)
+
+A `429 Too Many Requests` always surfaces as a `openrouter_client.RateLimitExceeded`
+(this is normalized for you — see the note below). By default the client does **not**
+silently retry it, so a caller's own retry loop stays in control. If you'd rather have
+the client absorb transient rate limits for you, pass a `RetryConfig` (disabled unless
+you set `enabled=True`):
+
+```python
+from openrouter_client import OpenRouterClient, RetryConfig
+
+client = OpenRouterClient(
+    api_key="your-api-key",
+    retry_config=RetryConfig(
+        enabled=True,
+        max_retries=5,           # retries after the initial attempt (total tries = 6)
+        base_delay=1.0,          # first backoff is base_delay * factor**0 seconds
+        factor=2.0,              # exponential growth per attempt
+        max_delay=30.0,          # cap on any single sleep this layer performs
+        jitter=0.25,             # up to 0.25s random jitter added per sleep
+        respect_retry_after=True # honor a Retry-After value that reaches this layer
+    ),
+)
+```
+
+When enabled, the client retries 429s that surface to it, applying exponential backoff
+with jitter between attempts (clamped to `max_delay`). If all retries are exhausted, the
+raised `RateLimitExceeded` carries `attempts` and `elapsed_seconds` in its `details` so
+you can tell "gave up after N backed-off tries" from an instant 429. Requests with a
+one-shot body (`files=`, or a streaming `data=`) are **not** retried, since the body
+cannot be safely re-sent.
+
+> **How this interacts with SmartSurge:** the underlying `SmartSurgeClient` already
+> handles a 429 that carries a parseable `Retry-After` header itself — it waits the
+> server-specified time (uncapped) and retries internally, so those never reach this
+> layer. In practice the 429s `RetryConfig` governs are the ones **without** a usable
+> `Retry-After`; `respect_retry_after` only applies on the rarer path where a value does
+> reach this layer. Note also that each retried attempt still emits SmartSurge's own
+> per-exception ERROR log line.
+
+> The separate `retries` / `backoff_factor` client parameters above are SmartSurge's
+> transport-level retries for 5xx/connection errors; `RetryConfig` is the 429-specific
+> policy and is independent of them.
+
 ## Examples
 
 ### Streaming Responses
