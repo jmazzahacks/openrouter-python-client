@@ -8,6 +8,7 @@ These cover:
 """
 
 import pytest
+from contextlib import contextmanager
 from unittest.mock import Mock, patch
 import requests
 
@@ -67,14 +68,16 @@ class Test_RetryConfig_01_Defaults:
 
 
 class Test_HTTPManager_Retry_02_Disabled:
-    """With retries disabled, behavior is unchanged from before the feature."""
+    """With retries disabled, a 429 is not retried but is still normalized."""
 
-    def test_smartsurge_rle_propagates_without_retry(self):
+    def test_smartsurge_rle_normalized_to_our_type_without_retry(self):
+        # Even disabled, SmartSurge's RateLimitExceeded is converted to ours so
+        # callers always catch a single documented exception type.
         mock_client = Mock(spec=SmartSurgeClient)
         mock_client.request.side_effect = _smartsurge_rle()
         mgr = _make_manager(mock_client)  # disabled by default
 
-        with pytest.raises(SmartSurgeRateLimitExceeded):
+        with pytest.raises(RateLimitExceeded):
             mgr.request(method=RequestMethod.POST, endpoint="x")
 
         assert mock_client.request.call_count == 1
@@ -148,6 +151,25 @@ class Test_HTTPManager_Retry_03_Enabled:
 
         mock_sleep.assert_called_once_with(5.0)
 
+    def test_non_replayable_body_is_not_retried(self):
+        # A one-shot body (files=) would be at EOF on a second send, so the retry
+        # loop is skipped — but the exception is still normalized to our type.
+        mock_client = Mock(spec=SmartSurgeClient)
+        mock_client.request.side_effect = _smartsurge_rle()
+        cfg = RetryConfig(enabled=True, max_retries=5, base_delay=0.01, jitter=0)
+        mgr = _make_manager(mock_client, cfg)
+
+        with patch("openrouter_client.http.time.sleep") as mock_sleep:
+            with pytest.raises(RateLimitExceeded):
+                mgr.request(
+                    method=RequestMethod.POST,
+                    endpoint="x",
+                    files={"file": b"binary-content"},
+                )
+
+        assert mock_client.request.call_count == 1
+        assert mock_sleep.call_count == 0
+
 
 class Test_HTTPManager_BackoffDelay_04_Schedule:
     """Direct unit tests of the backoff computation."""
@@ -183,12 +205,42 @@ class Test_HTTPManager_BackoffDelay_04_Schedule:
         delay = mgr._backoff_delay(None, 0)
         assert 1.0 <= delay <= 1.25
 
+    def test_jitter_never_exceeds_max_delay(self):
+        # Jitter is clamped AFTER being added, so the sleep never exceeds max_delay.
+        cfg = RetryConfig(enabled=True, base_delay=30.0, factor=1.0, jitter=10.0, max_delay=30.0)
+        mgr = _make_manager(Mock(spec=SmartSurgeClient), cfg)
+        for attempt in range(4):
+            assert mgr._backoff_delay(None, attempt) == 30.0
+
+
+@contextmanager
+def _mock_all_endpoints():
+    """Mock all endpoint classes so the real HTTPManager is kept but BaseEndpoint
+    Pydantic validation is bypassed (the repo's required idiom for local client
+    construction; KeysEndpoint returns rate-limit data so init doesn't hit the API).
+    """
+    mock_keys_cls = Mock()
+    mock_keys_cls.return_value.get_current = Mock(return_value={
+        "data": {"rate_limit": {"requests": 10, "interval": "10s"}}
+    })
+    with patch.multiple(
+        'openrouter_client.client',
+        CompletionsEndpoint=Mock(),
+        ChatEndpoint=Mock(),
+        ModelsEndpoint=Mock(),
+        GenerationsEndpoint=Mock(),
+        CreditsEndpoint=Mock(),
+        KeysEndpoint=mock_keys_cls,
+    ):
+        yield
+
 
 class Test_OpenRouterClient_RetryConfig_05_Wiring:
     """The retry_config kwarg threads from OpenRouterClient to its HTTPManager.
 
     This covers the exact usage documented in the README's
-    'Retrying 429s with Backoff (opt-in)' section.
+    'Retrying 429s with Backoff (opt-in)' section. The real HTTPManager is kept
+    (so we can assert on its retry_config); only the endpoint classes are mocked.
     """
 
     def test_retry_config_reaches_http_manager(self):
@@ -201,11 +253,11 @@ class Test_OpenRouterClient_RetryConfig_05_Wiring:
             jitter=0.25,
             respect_retry_after=True,
         )
-        with patch("openrouter_client.client.OpenRouterClient._initialize_rate_limit"):
+        with _mock_all_endpoints():
             client = OpenRouterClient(api_key="test-key", retry_config=cfg)
         assert client.http_manager.retry_config is cfg
 
     def test_client_defaults_to_disabled_retry_config(self):
-        with patch("openrouter_client.client.OpenRouterClient._initialize_rate_limit"):
+        with _mock_all_endpoints():
             client = OpenRouterClient(api_key="test-key")
         assert client.http_manager.retry_config.enabled is False

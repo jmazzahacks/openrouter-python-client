@@ -11,7 +11,8 @@ Exported:
 import logging
 import random
 import time
-from typing import Dict, Optional, Any, Union, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, Optional, Tuple, Union
 
 import requests
 from pydantic import BaseModel, Field
@@ -26,10 +27,19 @@ class RetryConfig(BaseModel):
     """
     Opt-in configuration for retrying HTTP 429 (rate limit) responses with backoff.
 
-    Disabled by default (``enabled=False``) so existing behavior is unchanged: a
-    429 propagates immediately. When enabled, ``HTTPManager`` retries a rate-limited
-    request, honoring the upstream ``Retry-After`` header when present and otherwise
-    applying exponential backoff with jitter.
+    Disabled by default (``enabled=False``) so existing behavior is unchanged. When
+    enabled, ``HTTPManager`` retries a 429 that *surfaces from* the underlying client,
+    applying exponential backoff with jitter between attempts.
+
+    Important interaction with SmartSurge: the bundled ``SmartSurgeClient`` handles a
+    429 that carries a parseable ``Retry-After`` header *itself* — it sleeps the
+    server-specified time (uncapped) and retries internally, so such responses never
+    reach this layer. In practice the 429s that surface here (and that this backoff
+    governs) are the ones *without* a usable ``Retry-After``. ``respect_retry_after``
+    and the ``Retry-After`` handling below therefore only take effect on the rarer
+    path where a ``Retry-After`` value does reach this layer (e.g. a custom client, or
+    a future SmartSurge that surfaces it); they are kept so this layer stays correct
+    if/when that happens.
 
     Attributes:
         enabled (bool): Master switch. When False, no 429 retrying is performed.
@@ -38,12 +48,14 @@ class RetryConfig(BaseModel):
         base_delay (float): Base delay in seconds for the exponential schedule
             (delay for the first retry when no Retry-After is available).
         factor (float): Exponential growth factor applied per attempt.
-        max_delay (float): Upper bound (seconds) on any single sleep, including a
-            server-provided Retry-After.
+        max_delay (float): Upper bound (seconds) on any single sleep performed by
+            *this* retry layer (the exponential delay, jitter included, and any
+            Retry-After this layer honors). It does not bound SmartSurge's own
+            internal Retry-After sleep.
         jitter (float): Maximum random jitter (seconds) added to each computed
             backoff delay (0 disables jitter).
-        respect_retry_after (bool): When True, an upstream Retry-After header takes
-            precedence over the computed exponential delay.
+        respect_retry_after (bool): When True, a Retry-After value that reaches this
+            layer takes precedence over the computed exponential delay.
     """
 
     enabled: bool = False
@@ -53,6 +65,14 @@ class RetryConfig(BaseModel):
     max_delay: float = Field(default=30.0, gt=0)
     jitter: float = Field(default=0.25, ge=0)
     respect_retry_after: bool = True
+
+
+@dataclass
+class _RetryState:
+    """Internal progress of a single retried request (bundles attempt + start)."""
+
+    attempt: int
+    start: float
 
 
 class HTTPManager:
@@ -146,26 +166,58 @@ class HTTPManager:
         Compute the sleep (seconds) before the next retry.
 
         Honors ``Retry-After`` when present and enabled; otherwise uses exponential
-        backoff (base * factor**attempt) with random jitter, capped at max_delay.
+        backoff (base * factor**attempt) with random jitter. The returned delay is
+        always clamped to ``max_delay`` *after* jitter, so it never exceeds it.
         """
         cfg = self.retry_config
         if cfg.respect_retry_after and retry_after is not None:
             return float(min(retry_after, cfg.max_delay))
         delay = cfg.base_delay * (cfg.factor ** attempt)
-        delay = min(delay, cfg.max_delay)
         if cfg.jitter > 0:
             delay += random.uniform(0, cfg.jitter)
-        return delay
+        return float(min(delay, cfg.max_delay))
+
+    @staticmethod
+    def _is_replayable(request_kwargs: Dict[str, Any]) -> bool:
+        """
+        Whether a request body can be safely re-sent on a retry.
+
+        A retry re-passes the same ``request_kwargs`` to the client, so a one-shot
+        body (an open file in ``files``, or a generator/stream in ``data``) would be
+        at EOF on the second attempt and silently send empty/truncated content.
+        ``json`` bodies and dict/str/bytes ``data`` are re-serialized each call and
+        are safe.
+        """
+        if request_kwargs.get('files') is not None:
+            return False
+        data = request_kwargs.get('data')
+        return data is None or isinstance(data, (dict, str, bytes, bytearray))
+
+    def _single_request(self, request_kwargs: Dict[str, Any]) -> requests.Response:
+        """
+        Issue one request, normalizing SmartSurge's rate-limit error to ours.
+
+        SmartSurge raises its own ``RateLimitExceeded`` type on a 429; we convert it
+        to ``openrouter_client.RateLimitExceeded`` so callers always catch a single,
+        documented exception type regardless of whether retries are enabled.
+        """
+        try:
+            return self.client.request(**request_kwargs)
+        except SmartSurgeRateLimitExceeded as e:
+            raise RateLimitExceeded(
+                message=str(e) or "Rate limit exceeded",
+                retry_after=getattr(e, 'retry_after', None),
+            ) from e
 
     def _invoke(self, **request_kwargs) -> requests.Response:
         """
         Call the underlying client, applying the 429 retry/backoff policy.
 
-        When ``retry_config.enabled`` is False this is a thin pass-through (any
-        rate-limit exception propagates exactly as before). When enabled, 429s are
-        retried up to ``max_retries`` times with backoff; on exhaustion an
-        ``openrouter_client`` ``RateLimitExceeded`` is raised carrying the attempt
-        count and total elapsed seconds.
+        Regardless of whether retries are enabled, a SmartSurge ``RateLimitExceeded``
+        is normalized to ``openrouter_client.RateLimitExceeded``. When retries are
+        enabled (and the request body is safely replayable), 429s are retried up to
+        ``max_retries`` times with backoff; on exhaustion a ``RateLimitExceeded`` is
+        raised carrying the attempt count and total elapsed seconds.
 
         Args:
             **request_kwargs: Forwarded verbatim to ``self.client.request``.
@@ -174,30 +226,37 @@ class HTTPManager:
             requests.Response: The (non-429, or un-retried) response.
 
         Raises:
-            RateLimitExceeded: When retries are exhausted on a 429.
+            RateLimitExceeded: On a 429 (retries disabled / non-replayable body) or
+                when retries are exhausted.
         """
         if not self.retry_config.enabled:
-            return self.client.request(**request_kwargs)
+            return self._single_request(request_kwargs)
 
-        attempt = 0
-        start = time.time()
+        if not self._is_replayable(request_kwargs):
+            # A one-shot body can't be re-sent; don't retry, but still normalize.
+            self.logger.debug("Retry skipped: request body is not safely replayable")
+            return self._single_request(request_kwargs)
+
+        state = _RetryState(attempt=0, start=time.time())
         while True:
             try:
                 response = self.client.request(**request_kwargs)
             except SmartSurgeRateLimitExceeded as e:
                 retry_after = getattr(e, 'retry_after', None)
-                if attempt >= self.retry_config.max_retries:
-                    raise self._rate_limit_exhausted(attempt, start, retry_after) from e
-                self._sleep_before_retry(retry_after, attempt)
-                attempt += 1
+                if state.attempt >= self.retry_config.max_retries:
+                    raise self._rate_limit_exhausted(state, retry_after) from e
+                self._sleep_before_retry(retry_after, state.attempt)
+                state.attempt += 1
                 continue
 
+            # Defensive: the bundled SmartSurge raises rather than returning a 429,
+            # but a custom/future client could return one — handle it uniformly.
             if response.status_code == 429:
                 retry_after = self._parse_retry_after(response.headers.get('Retry-After'))
-                if attempt >= self.retry_config.max_retries:
-                    raise self._rate_limit_exhausted(attempt, start, retry_after, response)
-                self._sleep_before_retry(retry_after, attempt)
-                attempt += 1
+                if state.attempt >= self.retry_config.max_retries:
+                    raise self._rate_limit_exhausted(state, retry_after, response)
+                self._sleep_before_retry(retry_after, state.attempt)
+                state.attempt += 1
                 continue
 
             return response
@@ -212,13 +271,12 @@ class HTTPManager:
         time.sleep(delay)
 
     def _rate_limit_exhausted(self,
-                              attempt: int,
-                              start: float,
+                              state: _RetryState,
                               retry_after: Optional[int],
                               response: Optional[requests.Response] = None) -> RateLimitExceeded:
         """Build the RateLimitExceeded raised once retries are exhausted."""
-        attempts = attempt + 1
-        elapsed = round(time.time() - start, 3)
+        attempts = state.attempt + 1
+        elapsed = round(time.time() - state.start, 3)
         return RateLimitExceeded(
             message=(
                 f"Rate limit exceeded; gave up after {attempts} attempts "
