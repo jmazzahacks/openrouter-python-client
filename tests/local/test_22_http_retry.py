@@ -11,6 +11,7 @@ import pytest
 from unittest.mock import Mock, patch
 import requests
 
+from openrouter_client import OpenRouterClient
 from openrouter_client.exceptions import RateLimitExceeded
 from openrouter_client.types import RequestMethod
 from openrouter_client.http import HTTPManager, RetryConfig
@@ -181,3 +182,30 @@ class Test_HTTPManager_BackoffDelay_04_Schedule:
         mgr = _make_manager(Mock(spec=SmartSurgeClient), cfg)
         delay = mgr._backoff_delay(None, 0)
         assert 1.0 <= delay <= 1.25
+
+
+class Test_OpenRouterClient_RetryConfig_05_Wiring:
+    """The retry_config kwarg threads from OpenRouterClient to its HTTPManager.
+
+    This covers the exact usage documented in the README's
+    'Retrying 429s with Backoff (opt-in)' section.
+    """
+
+    def test_retry_config_reaches_http_manager(self):
+        cfg = RetryConfig(
+            enabled=True,
+            max_retries=5,
+            base_delay=1.0,
+            factor=2.0,
+            max_delay=30.0,
+            jitter=0.25,
+            respect_retry_after=True,
+        )
+        with patch("openrouter_client.client.OpenRouterClient._initialize_rate_limit"):
+            client = OpenRouterClient(api_key="test-key", retry_config=cfg)
+        assert client.http_manager.retry_config is cfg
+
+    def test_client_defaults_to_disabled_retry_config(self):
+        with patch("openrouter_client.client.OpenRouterClient._initialize_rate_limit"):
+            client = OpenRouterClient(api_key="test-key")
+        assert client.http_manager.retry_config.enabled is False
