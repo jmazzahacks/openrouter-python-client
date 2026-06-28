@@ -85,6 +85,39 @@ rate_limits = client.calculate_rate_limits()
 print(f"Recommended: {rate_limits['requests']} requests per {rate_limits['period']} seconds")
 ```
 
+### Retrying 429s with Backoff (opt-in)
+
+By default a `429 Too Many Requests` propagates immediately as a `RateLimitExceeded`
+— the client does **not** silently retry it, so a caller's own retry loop stays in
+control. If you'd rather have the client absorb transient rate limits for you, pass a
+`RetryConfig` (disabled unless you set `enabled=True`):
+
+```python
+from openrouter_client import OpenRouterClient, RetryConfig
+
+client = OpenRouterClient(
+    api_key="your-api-key",
+    retry_config=RetryConfig(
+        enabled=True,
+        max_retries=5,           # retries after the initial attempt (total tries = 6)
+        base_delay=1.0,          # first backoff is base_delay * factor**0 seconds
+        factor=2.0,              # exponential growth per attempt
+        max_delay=30.0,          # cap on any single sleep (also caps Retry-After)
+        jitter=0.25,             # up to 0.25s random jitter added per sleep
+        respect_retry_after=True # honor the upstream Retry-After header when present
+    ),
+)
+```
+
+When enabled, the client honors a `Retry-After` header if the upstream sends one,
+otherwise applies exponential backoff with jitter between attempts. If all retries are
+exhausted, the raised `RateLimitExceeded` carries `attempts` and `elapsed_seconds` in
+its `details` so you can tell "gave up after N backed-off tries" from an instant 429.
+
+> Note: the separate `retries` / `backoff_factor` client parameters above are
+> SmartSurge's transport-level retries for 5xx/connection errors; `RetryConfig` is the
+> 429-specific policy and is independent of them.
+
 ## Examples
 
 ### Streaming Responses

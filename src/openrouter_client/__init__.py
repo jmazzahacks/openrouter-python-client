@@ -54,7 +54,7 @@ from .client import OpenRouterClient
 from .version import __version__
 from .logging import configure_logging
 from .auth import AuthManager
-from .http import HTTPManager
+from .http import HTTPManager, RetryConfig
 from .types import RequestMethod
 from .models import (
     Attachment,
@@ -87,6 +87,7 @@ __all__ = [
     'configure_logging',
     'AuthManager',
     'HTTPManager',
+    'RetryConfig',
     'RequestMethod',
     
     # Simple API

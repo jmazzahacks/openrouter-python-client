@@ -122,7 +122,7 @@ class OpenRouterClient:
             retries = kwargs.get('retries', 3)
             backoff_factor = kwargs.get('backoff_factor', 0.5)
             rate_limit = kwargs.get('rate_limit', None)
-            
+
             # Create http_manager with SmartSurge client
             surge_kwargs = {
                 'timeout': timeout,
@@ -130,8 +130,15 @@ class OpenRouterClient:
                 'backoff_factor': backoff_factor,
                 'rate_limit': rate_limit
             }
-            
-            self.http_manager = HTTPManager(base_url=base_url, **surge_kwargs)
+
+            # Opt-in 429 retry/backoff policy (disabled unless caller supplies one)
+            retry_config = kwargs.get('retry_config', None)
+
+            self.http_manager = HTTPManager(
+                base_url=base_url,
+                retry_config=retry_config,
+                **surge_kwargs
+            )
             self.secrets_manager = secrets_manager
             
             # Initialize all endpoint handlers

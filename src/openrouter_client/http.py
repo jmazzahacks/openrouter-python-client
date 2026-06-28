@@ -9,14 +9,50 @@ Exported:
 """
 
 import logging
+import random
 import time
 from typing import Dict, Optional, Any, Union, Tuple
 
 import requests
+from pydantic import BaseModel, Field
 from smartsurge.client import SmartSurgeClient
+from smartsurge.exceptions import RateLimitExceeded as SmartSurgeRateLimitExceeded
 
 from .exceptions import APIError, RateLimitExceeded, OpenRouterError
 from .types import RequestMethod
+
+
+class RetryConfig(BaseModel):
+    """
+    Opt-in configuration for retrying HTTP 429 (rate limit) responses with backoff.
+
+    Disabled by default (``enabled=False``) so existing behavior is unchanged: a
+    429 propagates immediately. When enabled, ``HTTPManager`` retries a rate-limited
+    request, honoring the upstream ``Retry-After`` header when present and otherwise
+    applying exponential backoff with jitter.
+
+    Attributes:
+        enabled (bool): Master switch. When False, no 429 retrying is performed.
+        max_retries (int): Maximum retry attempts after the initial request
+            (so total attempts == max_retries + 1).
+        base_delay (float): Base delay in seconds for the exponential schedule
+            (delay for the first retry when no Retry-After is available).
+        factor (float): Exponential growth factor applied per attempt.
+        max_delay (float): Upper bound (seconds) on any single sleep, including a
+            server-provided Retry-After.
+        jitter (float): Maximum random jitter (seconds) added to each computed
+            backoff delay (0 disables jitter).
+        respect_retry_after (bool): When True, an upstream Retry-After header takes
+            precedence over the computed exponential delay.
+    """
+
+    enabled: bool = False
+    max_retries: int = Field(default=5, ge=0)
+    base_delay: float = Field(default=1.0, gt=0)
+    factor: float = Field(default=2.0, ge=1.0)
+    max_delay: float = Field(default=30.0, gt=0)
+    jitter: float = Field(default=0.25, ge=0)
+    respect_retry_after: bool = True
 
 
 class HTTPManager:
@@ -29,26 +65,32 @@ class HTTPManager:
         logger (logging.Logger): HTTP communication logger.
     """
     
-    def __init__(self, 
+    def __init__(self,
                  base_url: Optional[str] = None,
                  client: Optional[SmartSurgeClient] = None,
+                 retry_config: Optional[RetryConfig] = None,
                  **kwargs):
         """
         Initialize the HTTP manager.
-        
+
         Args:
             base_url (str): Base URL for API requests. If None, uses the URL from pre-configured client.
             client (Optional[SmartSurgeClient]): Pre-configured HTTP client. If None, one is created.
+            retry_config (Optional[RetryConfig]): Opt-in 429 retry-with-backoff policy. If None,
+                a disabled default is used (429s propagate immediately, preserving prior behavior).
             kwargs: Additional arguments for SmartSurgeClient.
-            
+
         Raises:
             OpenRouterError: If neither base_url nor client is provided.
         """
         if base_url is None and client is None:
             raise OpenRouterError("Either base_url or client must be provided")
-        
+
         # Set up logger for HTTP operations
         self.logger = logging.getLogger("openrouter_client.http")
+
+        # 429 retry/backoff policy (disabled by default for backward compatibility)
+        self.retry_config = retry_config if retry_config is not None else RetryConfig()
         
         # Store base_url for forming full request URLs
         if base_url is None and client is not None:
@@ -87,6 +129,106 @@ class HTTPManager:
         smartsurge_client_logger = logging.getLogger('smartsurge.client')
         if smartsurge_client_logger.level <= logging.INFO:  # Only if not set to WARNING+ by user
             smartsurge_client_logger.setLevel(root_level)
+
+    @staticmethod
+    def _parse_retry_after(value: Optional[str]) -> Optional[int]:
+        """Parse a Retry-After header value into integer seconds, or None if absent/unparseable."""
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            # HTTP-date form of Retry-After is not handled here; fall back to backoff.
+            return None
+
+    def _backoff_delay(self, retry_after: Optional[int], attempt: int) -> float:
+        """
+        Compute the sleep (seconds) before the next retry.
+
+        Honors ``Retry-After`` when present and enabled; otherwise uses exponential
+        backoff (base * factor**attempt) with random jitter, capped at max_delay.
+        """
+        cfg = self.retry_config
+        if cfg.respect_retry_after and retry_after is not None:
+            return float(min(retry_after, cfg.max_delay))
+        delay = cfg.base_delay * (cfg.factor ** attempt)
+        delay = min(delay, cfg.max_delay)
+        if cfg.jitter > 0:
+            delay += random.uniform(0, cfg.jitter)
+        return delay
+
+    def _invoke(self, **request_kwargs) -> requests.Response:
+        """
+        Call the underlying client, applying the 429 retry/backoff policy.
+
+        When ``retry_config.enabled`` is False this is a thin pass-through (any
+        rate-limit exception propagates exactly as before). When enabled, 429s are
+        retried up to ``max_retries`` times with backoff; on exhaustion an
+        ``openrouter_client`` ``RateLimitExceeded`` is raised carrying the attempt
+        count and total elapsed seconds.
+
+        Args:
+            **request_kwargs: Forwarded verbatim to ``self.client.request``.
+
+        Returns:
+            requests.Response: The (non-429, or un-retried) response.
+
+        Raises:
+            RateLimitExceeded: When retries are exhausted on a 429.
+        """
+        if not self.retry_config.enabled:
+            return self.client.request(**request_kwargs)
+
+        attempt = 0
+        start = time.time()
+        while True:
+            try:
+                response = self.client.request(**request_kwargs)
+            except SmartSurgeRateLimitExceeded as e:
+                retry_after = getattr(e, 'retry_after', None)
+                if attempt >= self.retry_config.max_retries:
+                    raise self._rate_limit_exhausted(attempt, start, retry_after) from e
+                self._sleep_before_retry(retry_after, attempt)
+                attempt += 1
+                continue
+
+            if response.status_code == 429:
+                retry_after = self._parse_retry_after(response.headers.get('Retry-After'))
+                if attempt >= self.retry_config.max_retries:
+                    raise self._rate_limit_exhausted(attempt, start, retry_after, response)
+                self._sleep_before_retry(retry_after, attempt)
+                attempt += 1
+                continue
+
+            return response
+
+    def _sleep_before_retry(self, retry_after: Optional[int], attempt: int) -> None:
+        """Log and sleep for the computed backoff before the next attempt."""
+        delay = self._backoff_delay(retry_after, attempt)
+        self.logger.warning(
+            f"Rate limited (429); retry {attempt + 1}/{self.retry_config.max_retries} "
+            f"after {delay:.2f}s backoff"
+        )
+        time.sleep(delay)
+
+    def _rate_limit_exhausted(self,
+                              attempt: int,
+                              start: float,
+                              retry_after: Optional[int],
+                              response: Optional[requests.Response] = None) -> RateLimitExceeded:
+        """Build the RateLimitExceeded raised once retries are exhausted."""
+        attempts = attempt + 1
+        elapsed = round(time.time() - start, 3)
+        return RateLimitExceeded(
+            message=(
+                f"Rate limit exceeded; gave up after {attempts} attempts "
+                f"over {elapsed}s"
+            ),
+            retry_after=retry_after,
+            response=response,
+            attempts=attempts,
+            elapsed_seconds=elapsed,
+        )
 
     def request(self,
                 method: RequestMethod,
@@ -174,21 +316,18 @@ class HTTPManager:
         start_time = time.time()
         
         try:
-            try:
-                response = self.client.request(
-                    method=method.value,
-                    endpoint=url,
-                    headers=headers,
-                    params=params,
-                    json=json,
-                    data=data,
-                    files=files,
-                    stream=stream,
-                    timeout=actual_timeout
-                )
-            except Exception as e:
-                raise
-            
+            response = self._invoke(
+                method=method.value,
+                endpoint=url,
+                headers=headers,
+                params=params,
+                json=json,
+                data=data,
+                files=files,
+                stream=stream,
+                timeout=actual_timeout
+            )
+
             # Calculate request duration for logging
             duration = time.time() - start_time
             
