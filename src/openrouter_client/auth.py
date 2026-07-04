@@ -127,6 +127,10 @@ class AuthManager:
         
         # Initialize secrets managers
         self.secrets_manager = secrets_manager
+        # Whether the caller explicitly supplied a secrets manager (vs. us
+        # defaulting to the environment manager). Used to decide whether to ask
+        # the manager for the optional provisioning key.
+        explicit_secrets_manager = secrets_manager is not None
         
         # Initialize secure encryption if PyNaCl is available
         self._secure_box = None
@@ -167,16 +171,26 @@ class AuthManager:
         else:
             self.api_key = api_key
         
-        # Get provisioning API key with similar priority
+        # Get provisioning API key with priority: passed param > secrets manager
+        # (only when the caller supplied one) > environment variable. It is optional.
         if provisioning_api_key is None:
-            # If no secrets manager, create an environment secrets manager
-            if self.secrets_manager is None:
-                self.secrets_manager = EnvironmentSecretsManager()
-            
-            # Check for provisioning API key in environment (optional)
-            provisioning_api_key = os.environ.get("OPENROUTER_PROVISIONING_API_KEY", "")
+            # Only query an explicitly-provided secrets manager: the default
+            # environment manager warns and raises on this optional key, so we
+            # read the environment directly for it instead.
+            if explicit_secrets_manager and self.secrets_manager is not None:
+                try:
+                    self.logger.debug("Attempting to retrieve provisioning API key from secrets manager")
+                    key_bytes = self.secrets_manager.get_key("OPENROUTER_PROVISIONING_API_KEY")
+                    provisioning_api_key = key_bytes.decode('utf-8')
+                    self.logger.debug("Successfully retrieved provisioning API key from secrets manager")
+                except Exception as e:
+                    self.logger.debug(f"Provisioning API key not available from secrets manager: {str(e)}")
+
+            # Fall back to environment variable (optional)
             if not provisioning_api_key:
-                self.logger.debug("Provisioning API key not found in environment (optional)")
+                provisioning_api_key = os.environ.get("OPENROUTER_PROVISIONING_API_KEY", "")
+            if not provisioning_api_key:
+                self.logger.debug("Provisioning API key not found (optional)")
         
         # Securely store the provisioning API key if PyNaCl is available, otherwise store as plaintext
         if NACL_AVAILABLE and self._secure_box is not None and provisioning_api_key:

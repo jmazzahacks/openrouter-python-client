@@ -395,7 +395,7 @@ class Test_HTTPManager_Request_04_ErrorHandlingBehaviors:
             (
                 400,
                 None,  # No JSON, only text
-                "API Error: 400", None, None
+                "API Error 400: Error text", None, None
             ),
         ],
     )

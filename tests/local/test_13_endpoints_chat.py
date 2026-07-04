@@ -69,9 +69,11 @@ class Test_ChatEndpoint_Init_05_StateTransitionBehaviors:
         auth_manager = Mock(spec=AuthManager)
         http_manager = Mock(spec=HTTPManager)
         
-        with caplog.at_level(logging.INFO):
+        # Target the endpoint's own logger so the DEBUG record is captured even
+        # if an earlier test left the logger's level elevated (global state).
+        with caplog.at_level(logging.DEBUG, logger="openrouter_client.endpoints.chatendpoint"):
             endpoint = ChatEndpoint(auth_manager, http_manager)
-        
+
         assert "Initialized chat completions endpoint handler" in caplog.text
         assert endpoint.auth_manager is auth_manager
         assert endpoint.http_manager is http_manager

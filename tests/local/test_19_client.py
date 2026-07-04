@@ -52,7 +52,7 @@ class Test_OpenRouterClient_Init_01_NominalBehaviors:
     ])
     @patch('openrouter_client.client.AuthManager')
     @patch('openrouter_client.client.HTTPManager')
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_initialize_client_with_various_valid_parameter_combinations(
         self, mock_logging, mock_http_manager, mock_auth_manager,
         api_key, provisioning_key, base_url, org_id, ref_id, timeout, retries
@@ -142,7 +142,7 @@ class Test_OpenRouterClient_Init_03_BoundaryBehaviors:
     ])
     @patch('openrouter_client.client.AuthManager')
     @patch('openrouter_client.client.HTTPManager')
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_initialize_client_with_boundary_values_for_all_parameter_types(
         self, mock_logging, mock_http_manager, mock_auth_manager, boundary_params
     ):
@@ -181,7 +181,7 @@ class Test_OpenRouterClient_Init_04_ErrorHandlingBehaviors:
         ("http_manager", Exception),
         ("endpoints", Exception),
     ])
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_handle_initialization_failures_from_dependency_components(
         self, mock_logging, failure_component, exception_type
     ):
@@ -215,7 +215,7 @@ class Test_OpenRouterClient_Init_05_StateTransitionBehaviors:
     
     @patch('openrouter_client.client.AuthManager')
     @patch('openrouter_client.client.HTTPManager')
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_verify_proper_initialization_of_all_client_state_components(
         self, mock_logging, mock_http_manager, mock_auth_manager
     ):
@@ -260,7 +260,7 @@ class Test_OpenRouterClient_InitializeRateLimit_01_NominalBehaviors:
     
     @patch('openrouter_client.client.AuthManager')
     @patch('openrouter_client.client.HTTPManager')
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_rate_limit_set_from_api_key_info_during_initialization(
         self, mock_logging, mock_http_manager, mock_auth_manager
     ):
@@ -324,7 +324,7 @@ class Test_OpenRouterClient_InitializeRateLimit_01_NominalBehaviors:
     ])
     @patch('openrouter_client.client.AuthManager')
     @patch('openrouter_client.client.HTTPManager')
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_interval_parsing_supports_various_time_units(
         self, mock_logging, mock_http_manager, mock_auth_manager, interval, expected_seconds
     ):
@@ -396,7 +396,7 @@ class Test_OpenRouterClient_InitializeRateLimit_02_NegativeBehaviors:
     ])
     @patch('openrouter_client.client.AuthManager')
     @patch('openrouter_client.client.HTTPManager')
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_handles_invalid_or_missing_rate_limit_data_gracefully(
         self, mock_logging, mock_http_manager, mock_auth_manager, invalid_response
     ):
@@ -450,7 +450,7 @@ class Test_OpenRouterClient_InitializeEndpoints_01_NominalBehaviors:
     
     @patch('openrouter_client.client.AuthManager')
     @patch('openrouter_client.client.HTTPManager')
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_successfully_initialize_all_endpoint_handlers_with_shared_managers(
         self, mock_logging, mock_http_manager, mock_auth_manager
     ):
@@ -486,8 +486,9 @@ class Test_OpenRouterClient_InitializeEndpoints_01_NominalBehaviors:
                     http_manager=mock_http_instance
                 )
             
-            # Verify debug logging occurred
-            mock_logger.debug.assert_called_with("All endpoint handlers initialized successfully")
+            # Verify debug logging occurred (not necessarily the last debug call,
+            # since __init__ logs a final "initialized successfully" line after this)
+            mock_logger.debug.assert_any_call("All endpoint handlers initialized successfully")
 
 
 class Test_OpenRouterClient_InitializeEndpoints_02_NegativeBehaviors:
@@ -498,7 +499,7 @@ class Test_OpenRouterClient_InitializeEndpoints_02_NegativeBehaviors:
         "http_manager_none",
         "endpoint_creation_failure"
     ])
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_handle_invalid_manager_dependencies_during_endpoint_creation(
         self, mock_logging, invalid_manager_scenario
     ):
@@ -535,7 +536,7 @@ class Test_OpenRouterClient_InitializeEndpoints_03_BoundaryBehaviors:
     
     @patch('openrouter_client.client.AuthManager')
     @patch('openrouter_client.client.HTTPManager')
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_initialize_endpoints_when_managers_have_minimal_valid_configuration(
         self, mock_logging, mock_http_manager, mock_auth_manager
     ):
@@ -582,7 +583,7 @@ class Test_OpenRouterClient_InitializeEndpoints_04_ErrorHandlingBehaviors:
     ])
     @patch('openrouter_client.client.AuthManager')
     @patch('openrouter_client.client.HTTPManager')
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_handle_and_propagate_endpoint_creation_failures(
         self, mock_logging, mock_http_manager, mock_auth_manager, failing_endpoint
     ):
@@ -614,7 +615,7 @@ class Test_OpenRouterClient_InitializeEndpoints_05_StateTransitionBehaviors:
     
     @patch('openrouter_client.client.AuthManager')
     @patch('openrouter_client.client.HTTPManager')
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_verify_complete_endpoint_initialization_state_transition(
         self, mock_logging, mock_http_manager, mock_auth_manager
     ):
@@ -693,7 +694,6 @@ class Test_OpenRouterClient_RefreshContextLengths_01_NominalBehaviors:
         # Arrange
         with patch('openrouter_client.client.AuthManager'), \
              patch('openrouter_client.client.HTTPManager'), \
-             patch('openrouter_client.client.configure_logging'), \
              mock_all_endpoints():
             
             client = OpenRouterClient(api_key="test")
@@ -729,7 +729,6 @@ class Test_OpenRouterClient_RefreshContextLengths_02_NegativeBehaviors:
         # Arrange
         with patch('openrouter_client.client.AuthManager'), \
              patch('openrouter_client.client.HTTPManager'), \
-             patch('openrouter_client.client.configure_logging'), \
              mock_all_endpoints():
             
             client = OpenRouterClient(api_key="test")
@@ -766,7 +765,6 @@ class Test_OpenRouterClient_RefreshContextLengths_03_BoundaryBehaviors:
         # Arrange
         with patch('openrouter_client.client.AuthManager'), \
              patch('openrouter_client.client.HTTPManager'), \
-             patch('openrouter_client.client.configure_logging'), \
              mock_all_endpoints():
             
             client = OpenRouterClient(api_key="test")
@@ -801,7 +799,6 @@ class Test_OpenRouterClient_RefreshContextLengths_04_ErrorHandlingBehaviors:
         # Arrange
         with patch('openrouter_client.client.AuthManager'), \
              patch('openrouter_client.client.HTTPManager'), \
-             patch('openrouter_client.client.configure_logging'), \
              mock_all_endpoints():
             
             client = OpenRouterClient(api_key="test")
@@ -850,7 +847,6 @@ class Test_OpenRouterClient_RefreshContextLengths_05_StateTransitionBehaviors:
         # Arrange
         with patch('openrouter_client.client.AuthManager'), \
              patch('openrouter_client.client.HTTPManager'), \
-             patch('openrouter_client.client.configure_logging'), \
              mock_all_endpoints():
             
             client = OpenRouterClient(api_key="test")
@@ -883,7 +879,6 @@ class Test_OpenRouterClient_GetContextLength_01_NominalBehaviors:
         # Arrange
         with patch('openrouter_client.client.AuthManager'), \
              patch('openrouter_client.client.HTTPManager'), \
-             patch('openrouter_client.client.configure_logging'), \
              mock_all_endpoints():
             
             client = OpenRouterClient(api_key="test")
@@ -912,7 +907,6 @@ class Test_OpenRouterClient_GetContextLength_02_NegativeBehaviors:
         # Arrange
         with patch('openrouter_client.client.AuthManager'), \
              patch('openrouter_client.client.HTTPManager'), \
-             patch('openrouter_client.client.configure_logging'), \
              mock_all_endpoints():
             
             client = OpenRouterClient(api_key="test")
@@ -943,7 +937,6 @@ class Test_OpenRouterClient_GetContextLength_03_BoundaryBehaviors:
         # Arrange
         with patch('openrouter_client.client.AuthManager'), \
              patch('openrouter_client.client.HTTPManager'), \
-             patch('openrouter_client.client.configure_logging'), \
              mock_all_endpoints():
             
             client = OpenRouterClient(api_key="test")
@@ -964,7 +957,6 @@ class Test_OpenRouterClient_GetContextLength_04_ErrorHandlingBehaviors:
         # Arrange
         with patch('openrouter_client.client.AuthManager'), \
              patch('openrouter_client.client.HTTPManager'), \
-             patch('openrouter_client.client.configure_logging'), \
              mock_all_endpoints():
             
             client = OpenRouterClient(api_key="test")
@@ -986,7 +978,6 @@ class Test_OpenRouterClient_GetContextLength_05_StateTransitionBehaviors:
         # Arrange
         with patch('openrouter_client.client.AuthManager'), \
              patch('openrouter_client.client.HTTPManager'), \
-             patch('openrouter_client.client.configure_logging'), \
              mock_all_endpoints():
             
             client = OpenRouterClient(api_key="test")
@@ -1033,7 +1024,6 @@ class Test_OpenRouterClient_CalculateRateLimits_01_NominalBehaviors:
         # Arrange
         with patch('openrouter_client.client.AuthManager'), \
              patch('openrouter_client.client.HTTPManager'), \
-             patch('openrouter_client.client.configure_logging'), \
              mock_all_endpoints():
             
             client = OpenRouterClient(api_key="test")
@@ -1069,7 +1059,6 @@ class Test_OpenRouterClient_CalculateRateLimits_02_NegativeBehaviors:
         # Arrange
         with patch('openrouter_client.client.AuthManager'), \
              patch('openrouter_client.client.HTTPManager'), \
-             patch('openrouter_client.client.configure_logging'), \
              mock_all_endpoints():
             
             client = OpenRouterClient(api_key="test")
@@ -1116,7 +1105,6 @@ class Test_OpenRouterClient_CalculateRateLimits_03_BoundaryBehaviors:
         # Arrange
         with patch('openrouter_client.client.AuthManager'), \
              patch('openrouter_client.client.HTTPManager'), \
-             patch('openrouter_client.client.configure_logging'), \
              mock_all_endpoints():
             
             client = OpenRouterClient(api_key="test")
@@ -1147,7 +1135,6 @@ class Test_OpenRouterClient_CalculateRateLimits_04_ErrorHandlingBehaviors:
         # Arrange
         with patch('openrouter_client.client.AuthManager'), \
              patch('openrouter_client.client.HTTPManager'), \
-             patch('openrouter_client.client.configure_logging'), \
              mock_all_endpoints():
             
             client = OpenRouterClient(api_key="test")
@@ -1180,7 +1167,6 @@ class Test_OpenRouterClient_CalculateRateLimits_05_StateTransitionBehaviors:
         # Arrange
         with patch('openrouter_client.client.AuthManager'), \
              patch('openrouter_client.client.HTTPManager'), \
-             patch('openrouter_client.client.configure_logging'), \
              mock_all_endpoints():
             
             client = OpenRouterClient(api_key="test")
@@ -1205,7 +1191,7 @@ class Test_OpenRouterClient_Close_01_NominalBehaviors:
     
     @patch('openrouter_client.client.AuthManager')
     @patch('openrouter_client.client.HTTPManager')
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_successfully_release_all_client_resources_and_log_completion(
         self, mock_logging, mock_http_manager, mock_auth_manager
     ):
@@ -1245,7 +1231,7 @@ class Test_OpenRouterClient_Close_02_NegativeBehaviors:
     @pytest.mark.parametrize("scenario", ["already_closed", "missing_endpoints"])
     @patch('openrouter_client.client.AuthManager')
     @patch('openrouter_client.client.HTTPManager')
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_handle_repeated_or_partial_closure_scenarios_gracefully(
         self, mock_logging, mock_http_manager, mock_auth_manager, scenario
     ):
@@ -1299,7 +1285,7 @@ class Test_OpenRouterClient_Close_03_BoundaryBehaviors:
     """Test boundary behaviors for OpenRouterClient.close method."""
     
     @pytest.mark.parametrize("initialization_level", ["minimal", "partial_endpoints"])
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_handle_closure_with_varying_levels_of_client_initialization(
         self, mock_logging, initialization_level
     ):
@@ -1352,7 +1338,7 @@ class Test_OpenRouterClient_Close_04_ErrorHandlingBehaviors:
 
     @patch('openrouter_client.client.AuthManager')
     @patch('openrouter_client.client.HTTPManager')
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_handle_component_cleanup_failures_and_ensure_best_effort_resource_release(
         self, mock_logging, mock_http_manager, mock_auth_manager
     ):
@@ -1397,7 +1383,7 @@ class Test_OpenRouterClient_Close_05_StateTransitionBehaviors:
 
     @patch('openrouter_client.client.AuthManager')
     @patch('openrouter_client.client.HTTPManager')
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_verify_complete_transition_to_closed_state_with_resource_nullification(
         self, mock_logging, mock_http_manager, mock_auth_manager
     ):
@@ -1442,7 +1428,7 @@ class Test_OpenRouterClient_Enter_01_NominalBehaviors:
 
     @patch('openrouter_client.client.AuthManager')
     @patch('openrouter_client.client.HTTPManager')
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_return_self_instance_for_context_manager_usage(
         self, mock_logging, mock_http_manager, mock_auth_manager
     ):
@@ -1467,7 +1453,7 @@ class Test_OpenRouterClient_Exit_01_NominalBehaviors:
 
     @patch('openrouter_client.client.AuthManager')
     @patch('openrouter_client.client.HTTPManager')
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_successfully_complete_context_manager_lifecycle(
         self, mock_logging, mock_http_manager, mock_auth_manager
     ):
@@ -1507,7 +1493,7 @@ class Test_OpenRouterClient_Exit_02_NegativeBehaviors:
     ])
     @patch('openrouter_client.client.AuthManager')
     @patch('openrouter_client.client.HTTPManager')
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_handle_all_exception_scenarios_during_context_exit(
         self, mock_logging, mock_http_manager, mock_auth_manager, exc_type, exc_val, exc_tb
     ):
@@ -1544,7 +1530,7 @@ class Test_OpenRouterClient_Exit_04_ErrorHandlingBehaviors:
     @pytest.mark.parametrize("exception_in_context", [True, False])
     @patch('openrouter_client.client.AuthManager')
     @patch('openrouter_client.client.HTTPManager')
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_handle_exceptions_during_context_usage_and_ensure_resource_cleanup(
         self, mock_logging, mock_http_manager, mock_auth_manager, exception_in_context
     ):
@@ -1583,7 +1569,7 @@ class Test_OpenRouterClient_Exit_05_StateTransitionBehaviors:
     @pytest.mark.parametrize("exit_with_exception", [True, False])
     @patch('openrouter_client.client.AuthManager')
     @patch('openrouter_client.client.HTTPManager')
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_verify_consistent_state_transition_regardless_of_exit_conditions(
         self, mock_logging, mock_http_manager, mock_auth_manager, exit_with_exception
     ):
@@ -1628,7 +1614,7 @@ class Test_OpenRouterClient_SetRateLimit_01_NominalBehaviors:
     
     @patch('openrouter_client.client.AuthManager')
     @patch('openrouter_client.client.HTTPManager')
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_set_rate_limit_delegates_to_http_manager(
         self, mock_logging, mock_http_manager, mock_auth_manager
     ):
@@ -1670,7 +1656,7 @@ class Test_OpenRouterClient_SetRateLimit_01_NominalBehaviors:
     
     @patch('openrouter_client.client.AuthManager')
     @patch('openrouter_client.client.HTTPManager')
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_set_rate_limit_with_request_method_enum(
         self, mock_logging, mock_http_manager, mock_auth_manager
     ):
@@ -1717,7 +1703,7 @@ class Test_OpenRouterClient_SetRateLimit_04_ErrorHandlingBehaviors:
     
     @patch('openrouter_client.client.AuthManager')
     @patch('openrouter_client.client.HTTPManager')
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_set_rate_limit_propagates_http_manager_errors(
         self, mock_logging, mock_http_manager, mock_auth_manager
     ):
@@ -1756,7 +1742,7 @@ class Test_OpenRouterClient_SetGlobalRateLimit_01_NominalBehaviors:
     
     @patch('openrouter_client.client.AuthManager')
     @patch('openrouter_client.client.HTTPManager')
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_set_global_rate_limit_delegates_to_http_manager(
         self, mock_logging, mock_http_manager, mock_auth_manager
     ):
@@ -1801,7 +1787,7 @@ class Test_OpenRouterClient_SetGlobalRateLimit_04_ErrorHandlingBehaviors:
     
     @patch('openrouter_client.client.AuthManager')
     @patch('openrouter_client.client.HTTPManager')
-    @patch('openrouter_client.client.configure_logging')
+    @patch('openrouter_client.client.logging.getLogger')
     def test_set_global_rate_limit_propagates_http_manager_errors(
         self, mock_logging, mock_http_manager, mock_auth_manager
     ):

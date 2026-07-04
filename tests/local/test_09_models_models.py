@@ -145,10 +145,18 @@ def valid_model_endpoints_request_data():
 
 @pytest.fixture
 def valid_model_endpoints_response_data(valid_model_endpoint_data):
-    """Returns valid data for a ModelEndpointsResponse instance."""
+    """Returns valid data for a ModelEndpointsResponse instance.
+
+    The endpoints API returns ``data`` as a single model object (a dict)
+    that carries an ``endpoints`` list, not a bare list.
+    """
     return {
         "object": "list",
-        "data": [valid_model_endpoint_data]
+        "data": {
+            "id": "model_1",
+            "name": "Model Name",
+            "endpoints": [valid_model_endpoint_data],
+        }
     }
 
 
@@ -738,13 +746,13 @@ class Test_ModelEndpointsRequest_02_NegativeBehaviors:
 class Test_ModelEndpointsResponse_01_NominalBehaviors:
     """Tests for nominal behaviors of the ModelEndpointsResponse class."""
     
-    def test_instantiation_with_valid_data_list(self, valid_model_endpoints_response_data, valid_model_endpoint_data):
-        """Test instantiation with a valid list of ModelEndpoint objects - vital for API response parsing."""
+    def test_instantiation_with_valid_data_dict(self, valid_model_endpoints_response_data):
+        """Test instantiation with a valid data dict - vital for API response parsing."""
         model = ModelEndpointsResponse(**valid_model_endpoints_response_data)
         assert model.object == "list"
-        assert isinstance(model.data, list)
-        assert len(model.data) == 1
-        assert isinstance(model.data[0], ModelEndpoint)
+        assert isinstance(model.data, dict)
+        assert model.data["id"] == "model_1"
+        assert isinstance(model.data["endpoints"], list)
 
 
 class Test_ModelEndpointsResponse_02_NegativeBehaviors:
@@ -759,8 +767,8 @@ class Test_ModelEndpointsResponse_02_NegativeBehaviors:
         assert any(error["loc"] == ("data",) for error in errors)
     
     @pytest.mark.parametrize("invalid_value,expected_error_type", [
-        ("not_a_list", "list_type"),
-        ([{"id": 123}], "string_type")  # Invalid ModelEndpoint object
+        ("not_a_dict", "dict_type"),
+        ([{"id": 123}], "dict_type")  # a list is not a dict
     ])
     def test_invalid_data_field(self, invalid_value, expected_error_type):
         """Test that instantiation fails when the data field has an invalid value."""
@@ -774,9 +782,9 @@ class Test_ModelEndpointsResponse_02_NegativeBehaviors:
 class Test_ModelEndpointsResponse_03_BoundaryBehaviors:
     """Tests for boundary behaviors of the ModelEndpointsResponse class."""
     
-    def test_empty_data_list(self):
-        """Test model behavior with an empty data list - vital for handling API responses with no results."""
-        model = ModelEndpointsResponse(object="list", data=[])
+    def test_empty_data_dict(self):
+        """Test model behavior with an empty data dict - vital for handling API responses with no results."""
+        model = ModelEndpointsResponse(object="list", data={})
         assert model.object == "list"
-        assert isinstance(model.data, list)
+        assert isinstance(model.data, dict)
         assert len(model.data) == 0
