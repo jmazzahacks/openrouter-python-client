@@ -5,10 +5,49 @@ Simplified LLM-style API for OpenRouter Client.
 import json
 from typing import List, Optional, Dict, Any, Union, TYPE_CHECKING
 from .attachment import Attachment
+from .chat import Usage
 from ..exceptions import APIError
 
 if TYPE_CHECKING:
     from ..client import OpenRouterClient
+
+
+def _accumulate_usage(total: Optional[Usage], new: Optional[Usage]) -> Optional[Usage]:
+    """
+    Add a turn's ``Usage`` into a running total, summing tokens and cost.
+
+    Only the aggregate token counts and cost are carried on the running total;
+    the per-turn detail breakdowns (cost_details, *_tokens_details) are left unset
+    on the aggregate since they don't sum meaningfully across turns.
+
+    Args:
+        total: The running total so far, or None before the first turn.
+        new: This turn's usage, or None if the response carried no usage.
+
+    Returns:
+        Optional[Usage]: The updated running total (None only if both inputs are None).
+    """
+    if new is None:
+        return total
+    if total is None:
+        return Usage(
+            prompt_tokens=new.prompt_tokens,
+            completion_tokens=new.completion_tokens,
+            total_tokens=new.total_tokens,
+            cost=new.cost,
+        )
+
+    if total.cost is None and new.cost is None:
+        summed_cost: Optional[float] = None
+    else:
+        summed_cost = (total.cost or 0.0) + (new.cost or 0.0)
+
+    return Usage(
+        prompt_tokens=total.prompt_tokens + new.prompt_tokens,
+        completion_tokens=total.completion_tokens + new.completion_tokens,
+        total_tokens=total.total_tokens + new.total_tokens,
+        cost=summed_cost,
+    )
 
 
 def build_json_schema_response_format(
@@ -103,7 +142,12 @@ class LLMModel:
     def __init__(self, model_id: str, client: "OpenRouterClient"):
         self.model_id = model_id
         self.client = client
-    
+        # Token/cost usage from the most recent prompt() call on this model, or
+        # None before the first call (or if the response carried no usage block).
+        # Updated only on success: after a failed prompt() it retains the prior
+        # call's value. Not safe for concurrent prompt() calls on one instance.
+        self.last_usage: Optional[Usage] = None
+
     def prompt(
         self,
         text: str,
@@ -160,6 +204,10 @@ class LLMModel:
         
         response = self.client.chat.create(**chat_params)
 
+        # Capture this call's token/cost usage (None if the response carried no
+        # usage block).
+        self.last_usage = response.usage
+
         content = response.choices[0].message.content
 
         # Parse and validate JSON if schema was provided
@@ -167,7 +215,7 @@ class LLMModel:
             return parse_schema_response(content, schema)
 
         return content
-    
+
     def conversation(self, system: Optional[str] = None) -> "Conversation":
         """
         Create a new conversation context for this model.
@@ -193,11 +241,25 @@ class Conversation:
         self.model_id = model_id
         self.client = client
         self.messages = []
-        
+        # Usage from the most recent turn, and the running total across all turns
+        # in this conversation. Both are None before the first prompt() call.
+        # Updated only on a successful turn, so a failed prompt() leaves them
+        # unchanged and totals never double-count. A single Conversation is not
+        # safe for concurrent prompt() calls.
+        self.last_usage: Optional[Usage] = None
+        self.total_usage: Optional[Usage] = None
+
         # Add system message if provided
         if system:
             self.messages.append({"role": "system", "content": system})
-    
+
+    @property
+    def total_cost(self) -> float:
+        """Cumulative cost in credits across all turns (0.0 if no cost reported)."""
+        if self.total_usage is None or self.total_usage.cost is None:
+            return 0.0
+        return self.total_usage.cost
+
     def prompt(
         self,
         text: str,
@@ -245,6 +307,10 @@ class Conversation:
             chat_params["response_format"] = build_json_schema_response_format(schema)
         
         response = self.client.chat.create(**chat_params)
+
+        # Capture this turn's usage and fold it into the conversation running total.
+        self.last_usage = response.usage
+        self.total_usage = _accumulate_usage(self.total_usage, self.last_usage)
 
         response_content = response.choices[0].message.content
 

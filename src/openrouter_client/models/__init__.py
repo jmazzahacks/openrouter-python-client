@@ -35,6 +35,9 @@ from .chat import (
     ToolCallChunk,
     ToolCallFunction,
     Usage,
+    CostDetails,
+    PromptTokensDetails,
+    CompletionTokensDetails,
     ReasoningConfig,
 )
 
@@ -124,6 +127,9 @@ __all__ = [
     "ToolCallChunk",
     "ToolCallFunction",
     "Usage",
+    "CostDetails",
+    "PromptTokensDetails",
+    "CompletionTokensDetails",
     "ReasoningConfig",
     
     # Completions models

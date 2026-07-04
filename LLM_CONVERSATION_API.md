@@ -109,6 +109,55 @@ response = conversation.prompt(
 )
 ```
 
+### Cost & Usage Tracking
+
+Every OpenRouter response carries token counts and the authoritative per-request
+cost (in credits) inline — no request flag is needed. After each `prompt()` call,
+that data is available on the model / conversation object. The return value of
+`prompt()` is unchanged (still `str`, or `dict` when a schema is given); usage is
+exposed as a side attribute.
+
+```python
+# Single prompt — usage from the most recent call lives on the model
+model = get_model("openai/gpt-4o-mini", client)
+reply = model.prompt("What's the capital of France?")   # -> str (unchanged)
+
+print(model.last_usage.cost)          # e.g. 0.0000123  (credits charged)
+print(model.last_usage.prompt_tokens, model.last_usage.completion_tokens)
+print(model.last_usage.total_tokens)
+
+# Richer breakdowns when the provider supplies them:
+if model.last_usage.cost_details:
+    print(model.last_usage.cost_details.upstream_inference_cost)  # BYOK only
+if model.last_usage.prompt_tokens_details:
+    print(model.last_usage.prompt_tokens_details.cached_tokens)
+```
+
+```python
+# Conversations track each turn AND a running cumulative total
+conversation = model.conversation()
+
+conversation.prompt("Tell me a joke")
+print(conversation.last_usage.cost)     # cost of just that turn
+
+conversation.prompt("Explain why it's funny")
+print(conversation.last_usage.cost)     # cost of the second turn only
+print(conversation.total_cost)          # summed cost across all turns
+print(conversation.total_usage.total_tokens)   # summed tokens across all turns
+```
+
+Notes:
+- `last_usage` is a `Usage` model (`from openrouter_client import Usage`), or `None`
+  before the first call / if a response carried no usage block.
+- `cost` (and `cost_details`) may be `None` for some providers; `total_cost`
+  returns `0.0` when no cost was reported, and token totals still accumulate.
+- The running total carries summed token counts and cost only; per-turn detail
+  breakdowns live on each turn's `last_usage`, not on `total_usage`.
+- **BYOK accounts:** when the request runs on a bring-your-own-key provider
+  (`usage.is_byok == True`), `usage.cost` is `0.0` — OpenRouter charges nothing —
+  and the real per-request spend is in `usage.cost_details.upstream_inference_cost`.
+  If you track spend, read `upstream_inference_cost` for BYOK requests.
+
 ### Conversation Management
 ```python
 conversation = model.conversation()
@@ -153,6 +202,7 @@ print(f"After clear: {conversation.get_message_count()} messages")
 4. **Conversation History Access**: You can access the full conversation history via `conversation.messages` - this contains the complete OpenAI chat format with system, user, and assistant messages
 5. **Parameter Passthrough**: All standard OpenRouter/OpenAI parameters can be passed via kwargs
 6. **System Prompt Persistence**: System prompts are maintained even when clearing conversation history
+7. **Cost & Usage Tracking**: After each `prompt()`, token counts and the per-request cost are on `.last_usage`; conversations also expose cumulative `.total_cost` and `.total_usage`
 
 ## Example Use Cases
 

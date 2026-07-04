@@ -11,7 +11,10 @@ Exported Chat Completion Models:
 - ChatCompletionStreamResponseChoice: Choice model for streaming chat completion responses
 - ChatCompletionStreamResponseDelta: Delta model for streaming chat completion responses
 - ReasoningConfig: Configuration for model reasoning/thinking tokens
-- Usage: Token usage statistics model
+- Usage: Token usage and cost statistics model
+- CostDetails: Breakdown of the cost charged for a completion
+- PromptTokensDetails: Breakdown of prompt-token usage
+- CompletionTokensDetails: Breakdown of completion-token usage
 - ChatCompletionFunction: Function call representation in chat completions
 - ChatCompletionFunctionCall: Function call preference for chat completions
 - ToolCallFunction: Function details for a tool call
@@ -47,20 +50,82 @@ from .core import Message, FunctionDefinition, ResponseFormat, ToolDefinition, P
 from .providers import ProviderPreferences
 
 
+class CostDetails(BaseModel):
+    """
+    Breakdown of the cost charged for a completion.
+
+    Attributes:
+        upstream_inference_cost (Optional[float]): Cost charged by the upstream
+            provider, in credits. Only populated for BYOK (bring-your-own-key) requests.
+        cache_discount (Optional[float]): Credit discount applied for cache reads
+            (negative-cost savings on cached prompt tokens).
+    """
+    upstream_inference_cost: Optional[float] = Field(
+        None, description="Cost charged by the upstream provider in credits (BYOK only)"
+    )
+    cache_discount: Optional[float] = Field(
+        None, description="Credit discount applied for cache reads"
+    )
+
+
+class PromptTokensDetails(BaseModel):
+    """
+    Breakdown of prompt-token usage.
+
+    Attributes:
+        cached_tokens (Optional[int]): Prompt tokens served from cache.
+        cache_write_tokens (Optional[int]): Prompt tokens written to cache.
+        audio_tokens (Optional[int]): Prompt tokens attributable to audio input.
+    """
+    cached_tokens: Optional[int] = Field(None, ge=0, description="Prompt tokens served from cache")
+    cache_write_tokens: Optional[int] = Field(None, ge=0, description="Prompt tokens written to cache")
+    audio_tokens: Optional[int] = Field(None, ge=0, description="Prompt tokens attributable to audio input")
+
+
+class CompletionTokensDetails(BaseModel):
+    """
+    Breakdown of completion-token usage.
+
+    Attributes:
+        reasoning_tokens (Optional[int]): Completion tokens spent on reasoning/thinking.
+    """
+    reasoning_tokens: Optional[int] = Field(None, ge=0, description="Completion tokens spent on reasoning")
+
+
 class Usage(BaseModel):
     """
-    Token usage statistics for a completion.
-    
+    Token usage and cost statistics for a completion.
+
+    OpenRouter returns the authoritative per-request cost inline in every chat
+    completion response (the ``usage: {include: true}`` request flag is deprecated
+    and no longer required). ``cost`` is the total credits charged to the account.
+
     Attributes:
         prompt_tokens (int): Number of tokens in the prompt.
         completion_tokens (int): Number of tokens in the completion.
         total_tokens (int): Total number of tokens used.
-        cached_tokens (Optional[int]): Number of tokens served from cache.
-        cache_discount (Optional[float]): Discount amount applied due to cached tokens.
+        cost (Optional[float]): Total credits charged to the account for this request.
+        cost_details (Optional[CostDetails]): Breakdown of the cost charged.
+        prompt_tokens_details (Optional[PromptTokensDetails]): Breakdown of prompt-token usage.
+        completion_tokens_details (Optional[CompletionTokensDetails]): Breakdown of completion-token usage.
+        is_byok (Optional[bool]): Whether the request used a bring-your-own-key provider.
+        cached_tokens (Optional[int]): Legacy flat field for tokens served from cache.
+        cache_discount (Optional[float]): Legacy flat field for the cached-token discount.
+
+    Note:
+        ``cached_tokens`` and ``cache_discount`` are older flat fields kept for
+        backward compatibility. When present, the structured breakdowns are
+        authoritative: prefer ``prompt_tokens_details.cached_tokens`` and
+        ``cost_details.cache_discount`` over the flat fields.
     """
     prompt_tokens: int = Field(..., ge=0, description="Number of tokens in the prompt")
     completion_tokens: int = Field(..., ge=0, description="Number of tokens in the completion")
     total_tokens: int = Field(..., ge=0, description="Total number of tokens used")
+    cost: Optional[float] = Field(None, ge=0.0, description="Total credits charged to the account for this request")
+    cost_details: Optional[CostDetails] = Field(None, description="Breakdown of the cost charged")
+    prompt_tokens_details: Optional[PromptTokensDetails] = Field(None, description="Breakdown of prompt-token usage")
+    completion_tokens_details: Optional[CompletionTokensDetails] = Field(None, description="Breakdown of completion-token usage")
+    is_byok: Optional[bool] = Field(None, description="Whether the request used a bring-your-own-key provider")
     cached_tokens: Optional[int] = Field(None, ge=0, description="Number of tokens served from cache")
     cache_discount: Optional[float] = Field(None, ge=0, description="Discount amount applied due to cached tokens")
 

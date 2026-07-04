@@ -62,6 +62,10 @@ from .models import (
     get_model,
     build_json_schema_response_format,
     parse_schema_response,
+    Usage,
+    CostDetails,
+    PromptTokensDetails,
+    CompletionTokensDetails,
 )
 from .tools import (
     tool,
@@ -96,6 +100,10 @@ __all__ = [
     'get_model',
     'build_json_schema_response_format',
     'parse_schema_response',
+    'Usage',
+    'CostDetails',
+    'PromptTokensDetails',
+    'CompletionTokensDetails',
 
     # Tool utilities
     'tool',
