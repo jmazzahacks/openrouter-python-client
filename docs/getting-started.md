@@ -4,15 +4,17 @@ This guide will help you get up and running with the OpenRouter Python client qu
 
 ## Installation
 
-Install the package using pip:
+Install from a GitHub release tag (there is no PyPI package):
 
 ```bash
-pip install openrouter-client-unofficial
+pip install "git+https://github.com/jmazzahacks/openrouter-python-client@v0.0.21"
 ```
 
-For development with additional tools:
+For development with additional tools, clone the repo and install in editable mode:
 ```bash
-pip install openrouter-client-unofficial[dev]
+git clone https://github.com/jmazzahacks/openrouter-python-client.git
+cd openrouter-python-client
+pip install -e ".[dev]"
 ```
 
 ## Authentication
@@ -68,8 +70,8 @@ print(response.choices[0].message.content)
 You can list available models and their details:
 
 ```python
-# Get all available models
-models = client.models.list()
+# Get all available models (with full details)
+models = client.models.list(details=True)
 for model in models.data:
     print(f"{model.id}: {model.name}")
 
@@ -104,7 +106,7 @@ from openrouter_client import OpenRouterClient
 from openrouter_client.exceptions import (
     OpenRouterError,
     AuthenticationError,
-    RateLimitError,
+    RateLimitExceeded,
     ValidationError
 )
 
@@ -117,7 +119,7 @@ try:
     )
 except AuthenticationError:
     print("Invalid API key")
-except RateLimitError as e:
+except RateLimitExceeded as e:
     print(f"Rate limited. Retry after: {e.retry_after}")
 except ValidationError as e:
     print(f"Invalid request: {e}")

@@ -50,9 +50,9 @@ Using the convenient `@tool` decorator:
 
 ```python
 from openrouter_client import OpenRouterClient, tool
-import requests
+import json
 
-@tool
+@tool()
 def get_weather(location: str, unit: str = "celsius") -> dict:
     """Get current weather for a location.
     
@@ -74,7 +74,7 @@ client = OpenRouterClient(api_key="your-api-key")
 response = client.chat.create(
     model="anthropic/claude-3-opus",
     messages=[{"role": "user", "content": "What's the weather like in Paris?"}],
-    tools=[get_weather.to_dict()],
+    tools=[get_weather.as_chat_completion_tool],
     tool_choice="auto"
 )
 
@@ -82,7 +82,8 @@ response = client.chat.create(
 if response.choices[0].message.tool_calls:
     for tool_call in response.choices[0].message.tool_calls:
         if tool_call.function.name == "get_weather":
-            result = get_weather.execute(tool_call.function.arguments)
+            # tool_call.function.arguments is a JSON string; parse and call the tool
+            result = get_weather(**json.loads(tool_call.function.arguments))
             print(f"Weather result: {result}")
 else:
     print(response.choices[0].message.content)
@@ -149,7 +150,7 @@ def conversation():
     )
     
     assistant_message = response.choices[0].message
-    messages.append(assistant_message.dict())
+    messages.append(assistant_message.model_dump())
     
     # Handle tool calls
     if assistant_message.tool_calls:
@@ -211,8 +212,8 @@ from openrouter_client import OpenRouterClient
 
 client = OpenRouterClient(api_key="your-api-key")
 
-# List all models
-models = client.models.list()
+# List all models (details=True returns a ModelsResponse with full ModelData objects)
+models = client.models.list(details=True)
 print("Available models:")
 for model in models.data[:5]:  # Show first 5 models
     print(f"- {model.id}: {model.name}")
@@ -281,17 +282,21 @@ Monitor your credit usage:
 ```python
 from openrouter_client import OpenRouterClient
 
-client = OpenRouterClient(api_key="your-api-key")
+# credits.get() requires a provisioning key
+client = OpenRouterClient(
+    api_key="your-api-key",
+    provisioning_api_key="your-provisioning-key"
+)
 
-# Check credit balance
+# Check credit balance (credits.get() returns a plain dict)
 credits = client.credits.get()
-print(f"Current balance: ${credits.data.credits}")
-print(f"Total usage: ${credits.data.usage}")
+print(f"Total credits: ${credits['data']['total_credits']}")
+print(f"Total usage: ${credits['data']['total_usage']}")
 
 # Calculate rate limits based on credits
 rate_limits = client.calculate_rate_limits()
-print(f"Requests per minute: {rate_limits['requests_per_minute']}")
-print(f"Tokens per minute: {rate_limits['tokens_per_minute']}")
+print(f"Requests: {rate_limits['requests']}")
+print(f"Period (seconds): {rate_limits['period']}")
 
 # Make a request and monitor usage
 response = client.chat.create(
@@ -301,7 +306,11 @@ response = client.chat.create(
 
 # Check updated balance
 updated_credits = client.credits.get()
-cost = credits.data.credits - updated_credits.data.credits
+remaining = credits['data']['total_credits'] - credits['data']['total_usage']
+updated_remaining = (
+    updated_credits['data']['total_credits'] - updated_credits['data']['total_usage']
+)
+cost = remaining - updated_remaining
 print(f"Request cost: ${cost:.6f}")
 ```
 
@@ -375,10 +384,9 @@ from openrouter_client import OpenRouterClient
 from openrouter_client.exceptions import (
     OpenRouterError,
     AuthenticationError,
-    RateLimitError,
+    RateLimitExceeded,
     ValidationError,
-    NotFoundError,
-    ServerError
+    APIError
 )
 import time
 
@@ -398,7 +406,7 @@ def robust_chat_request(messages, model, max_retries=3):
             print("Authentication failed. Check your API key.")
             break
         
-        except RateLimitError as e:
+        except RateLimitExceeded as e:
             print(f"Rate limited. Waiting {e.retry_after} seconds...")
             time.sleep(e.retry_after)
             continue
@@ -407,18 +415,22 @@ def robust_chat_request(messages, model, max_retries=3):
             print(f"Invalid request parameters: {e}")
             break
         
-        except NotFoundError:
-            print(f"Model {model} not found. Try a different model.")
-            break
-        
-        except ServerError as e:
-            if attempt < max_retries - 1:
-                wait_time = 2 ** attempt  # Exponential backoff
-                print(f"Server error. Retrying in {wait_time} seconds...")
-                time.sleep(wait_time)
-                continue
+        except APIError as e:
+            # Branch on the HTTP status code for 404 / 5xx handling
+            if e.status_code == 404:
+                print(f"Model {model} not found. Try a different model.")
+                break
+            elif e.status_code is not None and e.status_code >= 500:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # Exponential backoff
+                    print(f"Server error. Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    print(f"Server error after {max_retries} attempts: {e}")
+                    break
             else:
-                print(f"Server error after {max_retries} attempts: {e}")
+                print(f"API error (status {e.status_code}): {e}")
                 break
         
         except OpenRouterError as e:
@@ -454,13 +466,13 @@ with OpenRouterClient(api_key="your-api-key") as client:
         messages=[{"role": "user", "content": "Hello!"}]
     )
     
-    response2 = client.models.list()
+    response2 = client.models.list(details=True)
     
-    credits = client.credits.get()
+    credits = client.credits.get()  # requires a provisioning key
     
     print(f"Response: {response1.choices[0].message.content}")
     print(f"Available models: {len(response2.data)}")
-    print(f"Credits: ${credits.data.credits}")
+    print(f"Total credits: ${credits['data']['total_credits']}")
 
 # Client resources are automatically cleaned up here
 print("Client cleanup completed automatically")

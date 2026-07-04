@@ -14,20 +14,24 @@ from openrouter_client import OpenRouterClient
 client = OpenRouterClient(
     api_key="your-api-key",
     base_url="https://openrouter.ai/api/v1",  # Optional
-    http_referer="https://your-site.com",     # Optional
-    x_title="Your App Name",                  # Optional
-    timeout=30.0,                             # Optional
-    max_retries=3                             # Optional
+    timeout=60.0,                             # Optional (kwarg)
 )
 ```
 
 **Parameters:**
-- `api_key` (str): Your OpenRouter API key
+- `api_key` (str, optional): Your OpenRouter API key. Falls back to the `OPENROUTER_API_KEY` env var.
+- `provisioning_api_key` (str, optional): Provisioning key for credit/key management endpoints. Falls back to `OPENROUTER_PROVISIONING_API_KEY`.
+- `secrets_manager` (SecretsManager, optional): Custom secrets manager. Defaults to `EnvironmentSecretsManager`.
 - `base_url` (str, optional): Base URL for the API (default: "https://openrouter.ai/api/v1")
-- `http_referer` (str, optional): HTTP referer header for requests
-- `x_title` (str, optional): X-Title header for requests
-- `timeout` (float, optional): Request timeout in seconds (default: 30.0)
-- `max_retries` (int, optional): Maximum number of retries (default: 3)
+- `organization_id` (str, optional): Organization identifier.
+- `reference_id` (str, optional): Reference identifier.
+
+Additional keyword arguments are consumed via `**kwargs`:
+- `timeout` (float, optional): Request timeout in seconds (default: 60.0)
+- `retries` (int, optional): Number of HTTP retries (default: 3)
+- `backoff_factor` (float, optional): Backoff factor between retries (default: 0.5)
+- `rate_limit` (optional): Manual rate-limit override (default: None)
+- `retry_config` (RetryConfig, optional): Opt-in 429 retry-with-backoff config (default: None; disabled). See [RetryConfig](#retryconfig).
 
 ## Chat Completions
 
@@ -61,7 +65,7 @@ response = client.chat.create(
 - `tools` (List[Dict], optional): Available tools for function calling
 - `tool_choice` (Union[str, Dict], optional): Tool choice strategy
 
-**Returns:** `ChatCompletionResponse` or `Iterator[ChatCompletionChunk]` if streaming
+**Returns:** `ChatCompletionResponse` or `Iterator[ChatCompletionStreamResponse]` if streaming
 
 ### client.chat.create() with Streaming
 
@@ -103,7 +107,7 @@ response = client.completions.create(
 - `stop` (Union[str, List[str]], optional): Stop sequences
 - `stream` (bool, optional): Enable streaming
 
-**Returns:** `CompletionResponse` or `Iterator[CompletionChunk]` if streaming
+**Returns:** `CompletionsResponse` or `Iterator[CompletionsStreamResponse]` if streaming
 
 ## Models
 
@@ -112,12 +116,21 @@ response = client.completions.create(
 List all available models.
 
 ```python
-models = client.models.list()
+# Default: a list of model-id strings
+model_ids = client.models.list()
+for model_id in model_ids:
+    print(model_id)
+
+# details=True: full ModelsResponse with model objects
+models = client.models.list(details=True)
 for model in models.data:
     print(f"{model.id}: {model.name}")
 ```
 
-**Returns:** `ModelsResponse` with list of available models
+**Parameters:**
+- `details` (bool, optional): When `False` (default) returns a `List[str]` of model IDs; when `True` returns a `ModelsResponse`.
+
+**Returns:** `List[str]` by default, or `ModelsResponse` (with `.data`) when `details=True`
 
 ### client.models.get()
 
@@ -132,16 +145,20 @@ print(f"Pricing: {model.pricing}")
 **Parameters:**
 - `model_id` (str): Model identifier
 
-**Returns:** `ModelInfo` with detailed model information
+**Returns:** `ModelData` with detailed model information
 
 ### client.models.list_endpoints()
 
-Get model endpoint information.
+Get model endpoint information. Both `author` and `slug` are required.
 
 ```python
-endpoints = client.models.list_endpoints()
-print(endpoints.data)  # Dictionary of model endpoint information
+endpoints = client.models.list_endpoints(author="anthropic", slug="claude-3-opus")
+print(endpoints.data)  # dict containing an `endpoints` list
 ```
+
+**Parameters:**
+- `author` (str): Model author/namespace (e.g., "anthropic")
+- `slug` (str): Model slug (e.g., "claude-3-opus")
 
 **Returns:** `ModelEndpointsResponse` with endpoint data
 
@@ -153,42 +170,43 @@ Get information about a specific generation.
 
 ```python
 generation = client.generations.get("gen_123456789")
-print(f"Status: {generation.status}")
-print(f"Created: {generation.created_at}")
+print(generation)  # plain dict
 ```
 
 **Parameters:**
 - `generation_id` (str): Generation identifier
 
-**Returns:** `GenerationResponse` with generation details
+**Returns:** `dict` with generation details
 
 ## Credits
 
 ### client.credits.get()
 
-Get current credit balance and usage information.
+Get current credit balance and usage information. Requires a provisioning API key.
 
 ```python
 credits = client.credits.get()
-print(f"Balance: ${credits.data.credits}")
-print(f"Usage: ${credits.data.usage}")
+print(f"Total credits: ${credits['data']['total_credits']}")
+print(f"Total usage: ${credits['data']['total_usage']}")
 ```
 
-**Returns:** `CreditsResponse` with balance and usage information
+**Returns:** `dict` of shape `{"data": {"total_credits": float, "total_usage": float}}`
 
 ## API Keys
 
-### client.keys.get()
+### client.keys.get_current()
 
-Get information about API keys.
+Get information about the currently authenticated API key.
 
 ```python
-keys_info = client.keys.get()
-print(f"Label: {keys_info.data.label}")
-print(f"Usage: {keys_info.data.usage}")
+keys_info = client.keys.get_current()
+print(f"Label: {keys_info['data']['label']}")
+print(f"Usage: {keys_info['data']['usage']}")
 ```
 
-**Returns:** `KeysResponse` with API key information
+**Returns:** `dict` of shape `{"data": {"label", "usage", "limit", "is_free_tier", "rate_limit": {...}}}`
+
+> To fetch a specific key instead of the current one, use `client.keys.get(key_hash)`, which requires a `key_hash` argument.
 
 ## Client Utilities
 
@@ -220,11 +238,12 @@ Calculate current rate limits based on credit balance.
 
 ```python
 rate_limits = client.calculate_rate_limits()
-print(f"Requests per minute: {rate_limits['requests_per_minute']}")
-print(f"Tokens per minute: {rate_limits['tokens_per_minute']}")
+print(f"Requests: {rate_limits['requests']}")
+print(f"Period: {rate_limits['period']}")
+print(f"Cooldown: {rate_limits['cooldown']}")
 ```
 
-**Returns:** `Dict` with rate limit information
+**Returns:** `Dict` with keys `requests`, `period`, and `cooldown`
 
 ## Response Models
 
@@ -240,10 +259,10 @@ class ChatCompletionResponse:
     usage: Optional[Usage]
 ```
 
-### CompletionResponse
+### CompletionsResponse
 
 ```python
-class CompletionResponse:
+class CompletionsResponse:
     id: str
     object: str
     created: int
@@ -252,38 +271,135 @@ class CompletionResponse:
     usage: Optional[Usage]
 ```
 
-### ModelInfo
+### ModelData
 
 ```python
-class ModelInfo:
+class ModelData:
     id: str
     name: str
-    description: str
+    description: Optional[str]
     context_length: int
     pricing: ModelPricing
-    top_provider: Optional[str]
+    top_provider: Optional[TopProvider]
 ```
+
+### Usage
+
+Returned inline on every response as `response.usage` (`Optional[Usage]`). Cost is
+always populated automatically — do **not** pass `include={"usage": True}` (a deprecated
+no-op).
+
+```python
+class Usage:
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    cost: Optional[float]                              # total credits spent
+    cost_details: Optional[CostDetails]               # upstream_inference_cost, cache_discount
+    prompt_tokens_details: Optional[PromptTokensDetails]      # cached_tokens, cache_write_tokens, audio_tokens
+    completion_tokens_details: Optional[CompletionTokensDetails]  # reasoning_tokens
+    is_byok: Optional[bool]
+```
+
+> **BYOK note:** when `is_byok` is `True`, `cost` is `0.0` and the real spend is in
+> `cost_details.upstream_inference_cost`.
 
 ## Error Handling
 
 All methods can raise the following exceptions:
 
-- `OpenRouterError`: Base exception for all API errors
+- `OpenRouterError`: Base exception for all errors
 - `AuthenticationError`: Invalid API key or authentication failure
-- `RateLimitError`: Rate limit exceeded
+- `APIError`: General API error; carries `.status_code` (branch on it for 404/5xx)
+- `RateLimitExceeded` (subclass of `APIError`): Rate limit exceeded; has `.retry_after` and `.status_code`
+- `ProviderError` (subclass of `APIError`): Upstream provider error
 - `ValidationError`: Invalid request parameters
-- `NotFoundError`: Requested resource not found
-- `ServerError`: Server-side error (5xx status codes)
+- `ContextLengthExceededError` (subclass of `ValidationError`): Prompt exceeds the model's context length
+- `StreamingError`: Error during a streaming response
+- `ResumeError` (subclass of `StreamingError`): Failure resuming an interrupted stream
 
 ```python
-from openrouter_client.exceptions import *
+from openrouter_client.exceptions import (
+    AuthenticationError,
+    RateLimitExceeded,
+    ValidationError,
+    APIError,
+)
 
 try:
     response = client.chat.create(...)
 except AuthenticationError:
     print("Check your API key")
-except RateLimitError as e:
+except RateLimitExceeded as e:
     print(f"Rate limited. Retry after: {e.retry_after}")
 except ValidationError as e:
     print(f"Invalid request: {e}")
+except APIError as e:
+    # 404, 5xx, etc. — branch on the status code
+    if e.status_code == 404:
+        print("Not found")
+    else:
+        print(f"API error {e.status_code}: {e}")
 ```
+
+## High-Level llm-style API
+
+A higher-level, `llm`-inspired wrapper lives in `models/llm.py`. Get a model handle with
+`get_model` and call `.prompt()` for one-shot calls or `.conversation()` for multi-turn.
+
+```python
+from openrouter_client import OpenRouterClient, get_model
+
+client = OpenRouterClient(api_key="your-api-key")
+model = get_model("anthropic/claude-3-opus", client)
+
+# Returns a str
+answer = model.prompt("What is the capital of France?", system="Be concise.")
+
+# Returns a validated dict when a schema is provided
+data = model.prompt("Extract the city and country.", schema=my_json_schema)
+
+# Usage from the most recent prompt
+print(model.last_usage)  # Optional[Usage]
+```
+
+`model.prompt(text, system=None, attachments=None, schema=None, **kwargs)` returns a `str`,
+or a parsed-and-validated `dict` when `schema` is given.
+
+### Conversations
+
+```python
+conv = model.conversation(system="You are a helpful assistant.")
+conv.prompt("Hello!")
+conv.prompt("And what did I just say?")
+
+print(conv.last_usage)   # usage for the most recent turn
+print(conv.total_usage)  # Optional[Usage] — cumulative across the conversation
+print(conv.total_cost)   # float — cumulative cost (0.0 if none reported)
+```
+
+`conv.prompt(text, attachments=None, schema=None, **kwargs)` returns a `str`/`dict` just like
+`model.prompt`.
+
+## RetryConfig
+
+Opt-in retry-with-backoff for HTTP 429 responses. Disabled by default; the **only** way to
+enable retries is by passing a `RetryConfig` as `retry_config=`.
+
+```python
+from openrouter_client import OpenRouterClient, RetryConfig
+
+client = OpenRouterClient(
+    api_key="your-api-key",
+    retry_config=RetryConfig(enabled=True, max_retries=5),
+)
+```
+
+**Fields (with defaults):**
+- `enabled` (bool): Enable 429 retries (default: `False`)
+- `max_retries` (int): Maximum retry attempts (default: `5`)
+- `base_delay` (float): Initial backoff delay in seconds (default: `1.0`)
+- `factor` (float): Exponential backoff multiplier (default: `2.0`)
+- `max_delay` (float): Maximum delay between retries in seconds (default: `30.0`)
+- `jitter` (float): Random jitter fraction applied to each delay (default: `0.25`)
+- `respect_retry_after` (bool): Honor the server's `Retry-After` header (default: `True`)

@@ -132,9 +132,9 @@ python advanced_usage.py
 
 Before running any examples, make sure you have:
 
-1. **Installed the OpenRouter client:**
+1. **Installed the OpenRouter client** (distributed via GitHub only — there is no PyPI package):
    ```bash
-   pip install openrouter-client-unofficial
+   pip install "git+https://github.com/jmazzahacks/openrouter-python-client@v0.0.21"
    ```
 
 2. **Set your API key** (choose one method):
@@ -155,8 +155,8 @@ Before running any examples, make sure you have:
 # Run a specific example
 python basic_chat.py
 
-# Run with debug output
-OPENROUTER_LOG_LEVEL=DEBUG python function_calling.py
+# Enable debug logging from within a script via configure_logging(level="DEBUG")
+python function_calling.py
 ```
 
 ### Running All Examples

@@ -11,6 +11,8 @@ An unofficial Python client for [OpenRouter](https://openrouter.ai/), providing 
 - **Streaming Support**: Stream responses from chat and completion endpoints
 - **Automatic Rate Limiting**: Automatically configures rate limits based on your API key's limits using SmartSurge
 - **Smart Retries**: Built-in retry logic with exponential backoff for reliable API communication
+- **Opt-in 429 Retry**: Optional retry-with-backoff for `429 Too Many Requests` responses via `RetryConfig`
+- **Cost & Usage Tracking**: Per-request cost/usage on `response.usage.cost`; the high-level API exposes `model.last_usage` and `conversation.total_cost`
 - **Type Safety**: Fully typed interfaces with Pydantic models for all request and response data
 - **Tool Calling**: Built-in support for tool-calling with helper functions and decorators
 - **Safe Key Management**: Secure API key management with in-memory encryption and extensible secrets management
@@ -26,8 +28,18 @@ This project is an open-source interface designed to interact with the OpenRoute
 
 ## Installation
 
+Install from a GitHub release tag (there is no PyPI package):
+
 ```bash
-pip install openrouter-client-unofficial
+pip install "git+https://github.com/jmazzahacks/openrouter-python-client@v0.0.21"
+```
+
+For development, clone the repo and install in editable mode with dev tooling:
+
+```bash
+git clone https://github.com/jmazzahacks/openrouter-python-client.git
+cd openrouter-python-client
+pip install -e ".[dev]"
 ```
 
 ## Quickstart
@@ -63,7 +75,6 @@ client = OpenRouterClient(
     base_url="https://openrouter.ai/api/v1",  # Base URL for API
     organization_id="your-org-id",  # Optional organization ID
     reference_id="your-ref-id",  # Optional reference ID
-    log_level="INFO",  # Logging level
     timeout=60.0,  # Request timeout in seconds
     retries=3,  # Number of retries for failed requests
     backoff_factor=0.5,  # Exponential backoff factor
@@ -159,7 +170,7 @@ from openrouter_client.models import ChatCompletionTool, FunctionDefinition, Str
 client = OpenRouterClient(api_key="your-api-key")
 
 # Method 1: Using the @tool decorator (recommended)
-@tool
+@tool()
 def get_weather(location: str) -> str:
     """Get the weather for a location.
     
@@ -197,7 +208,7 @@ response = client.chat.create(
     messages=[
         {"role": "user", "content": "What's the weather like in San Francisco?"}
     ],
-    tools=[get_weather],  # Using the decorated function
+    tools=[get_weather.as_chat_completion_tool],  # Using the decorated function
 )
 
 # Process tool calls

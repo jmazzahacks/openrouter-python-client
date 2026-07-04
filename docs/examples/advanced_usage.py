@@ -20,9 +20,7 @@ def main():
     api_key = os.environ.get("OPENROUTER_API_KEY", "your-api-key-here")
     
     client = OpenRouterClient(
-        api_key=api_key,
-        http_referer="https://your-site.com",
-        x_title="Advanced Usage Example"
+        api_key=api_key
     )
     
     # Example 1: Context manager usage
@@ -317,15 +315,11 @@ def demonstrate_custom_client_configuration():
         api_key=api_key,
         base_url="https://openrouter.ai/api/v1",
         timeout=60.0,           # Extended timeout
-        max_retries=5,          # More retries
-        http_referer="https://advanced-example.com",
-        x_title="Advanced OpenRouter Client"
+        retries=5,              # More retries
     )
-    
+
     print("Custom client configuration:")
     print(f"  Base URL: {custom_client.http_manager.base_url}")
-    print(f"  Timeout: {custom_client.http_manager.timeout}")
-    print(f"  Max Retries: {custom_client.http_manager.max_retries}")
     
     # Test custom client
     try:

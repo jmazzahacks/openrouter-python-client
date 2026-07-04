@@ -14,9 +14,7 @@ def main():
     api_key = os.environ.get("OPENROUTER_API_KEY", "your-api-key-here")
     
     client = OpenRouterClient(
-        api_key=api_key,
-        http_referer="https://your-site.com",
-        x_title="Streaming Chat Example"
+        api_key=api_key
     )
     
     # Basic streaming example

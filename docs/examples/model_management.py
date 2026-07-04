@@ -13,15 +13,13 @@ def main():
     api_key = os.environ.get("OPENROUTER_API_KEY", "your-api-key-here")
     
     client = OpenRouterClient(
-        api_key=api_key,
-        http_referer="https://your-site.com",
-        x_title="Model Management Example"
+        api_key=api_key
     )
     
     # Example 1: List all available models
     print("=== Available Models ===")
     
-    models_response = client.models.list()
+    models_response = client.models.list(details=True)
     
     print(f"Total models available: {len(models_response.data)}")
     print("\nFirst 10 models:")
@@ -130,7 +128,7 @@ def demonstrate_model_pricing():
     api_key = os.environ.get("OPENROUTER_API_KEY", "your-api-key-here")
     client = OpenRouterClient(api_key=api_key)
     
-    models_response = client.models.list()
+    models_response = client.models.list(details=True)
     
     # Find cheapest models
     priced_models = []
@@ -171,7 +169,7 @@ def demonstrate_model_selection():
     
     def select_model_for_task(task_type: str, max_budget: float = None, min_context: int = None):
         """Select the best model for a given task type and constraints."""
-        models_response = client.models.list()
+        models_response = client.models.list(details=True)
         suitable_models = []
         
         for model in models_response.data:
@@ -236,23 +234,25 @@ def demonstrate_model_endpoints():
     client = OpenRouterClient(api_key=api_key)
     
     try:
-        # Get model endpoints information
-        endpoints_response = client.models.list_endpoints()
-        
-        print("Model endpoints information:")
-        if hasattr(endpoints_response, 'data') and isinstance(endpoints_response.data, dict):
-            # Show first few entries
-            items = list(endpoints_response.data.items())[:5]
-            for model_id, endpoint_info in items:
-                print(f"\nModel: {model_id}")
-                if isinstance(endpoint_info, dict):
-                    for key, value in endpoint_info.items():
-                        print(f"  {key}: {value}")
-                else:
-                    print(f"  Info: {endpoint_info}")
-        else:
-            print(f"Endpoints data: {endpoints_response.data}")
-            
+        # Get endpoints for a specific model; both author and slug are required.
+        endpoints_response = client.models.list_endpoints(
+            author="anthropic",
+            slug="claude-3-haiku",
+        )
+
+        # .data is a dict that contains an "endpoints" list.
+        data = endpoints_response.data
+        print(f"Model: {data.get('name', 'unknown')} ({data.get('id', '')})")
+
+        endpoints = data.get("endpoints", [])
+        print(f"Available endpoints ({len(endpoints)}):")
+        for endpoint in endpoints[:5]:
+            if isinstance(endpoint, dict):
+                print(f"  - Provider: {endpoint.get('provider_name', 'unknown')}, "
+                      f"Context: {endpoint.get('context_length', 'unknown')}")
+            else:
+                print(f"  - {endpoint}")
+
     except Exception as e:
         print(f"Error getting model endpoints: {e}")
 

@@ -11,10 +11,9 @@ from openrouter_client import OpenRouterClient
 from openrouter_client.exceptions import (
     OpenRouterError,
     AuthenticationError,
-    RateLimitError,
+    RateLimitExceeded,
     ValidationError,
-    NotFoundError,
-    ServerError
+    APIError
 )
 
 def main():
@@ -22,9 +21,7 @@ def main():
     api_key = os.environ.get("OPENROUTER_API_KEY", "your-api-key-here")
     
     client = OpenRouterClient(
-        api_key=api_key,
-        http_referer="https://your-site.com",
-        x_title="Error Handling Example"
+        api_key=api_key
     )
     
     # Example 1: Basic error handling
@@ -41,22 +38,25 @@ def main():
         print(f"Authentication failed: {e}")
         print("Check your API key and ensure it's valid")
         
-    except RateLimitError as e:
+    except RateLimitExceeded as e:
         print(f"Rate limit exceeded: {e}")
         print(f"Retry after: {e.retry_after} seconds")
-        
+
     except ValidationError as e:
         print(f"Invalid request parameters: {e}")
         print("Check your request parameters and model availability")
-        
-    except NotFoundError as e:
-        print(f"Resource not found: {e}")
-        print("The specified model or endpoint may not exist")
-        
-    except ServerError as e:
-        print(f"Server error: {e}")
-        print("This is likely a temporary issue, try again later")
-        
+
+    except APIError as e:
+        # Branch on the HTTP status code for 404 / 5xx handling
+        if e.status_code == 404:
+            print(f"Resource not found: {e}")
+            print("The specified model or endpoint may not exist")
+        elif e.status_code is not None and e.status_code >= 500:
+            print(f"Server error: {e}")
+            print("This is likely a temporary issue, try again later")
+        else:
+            print(f"API error: {e}")
+
     except OpenRouterError as e:
         print(f"General API error: {e}")
         
@@ -110,7 +110,7 @@ def demonstrate_rate_limit_handling():
                 )
                 return response
                 
-            except RateLimitError as e:
+            except RateLimitExceeded as e:
                 if attempt < max_retries - 1:  # Don't sleep on last attempt
                     wait_time = e.retry_after if hasattr(e, 'retry_after') else (backoff_multiplier ** attempt)
                     print(f"Rate limited on attempt {attempt + 1}. Waiting {wait_time} seconds...")
@@ -235,10 +235,7 @@ def demonstrate_comprehensive_error_handler():
             except ValidationError as e:
                 return False, f"Invalid request: {e}. Check your parameters."
                 
-            except NotFoundError as e:
-                return False, f"Resource not found: {e}. Check model availability."
-                
-            except RateLimitError as e:
+            except RateLimitExceeded as e:
                 if attempt < max_retries - 1:
                     wait_time = getattr(e, 'retry_after', 2 ** attempt)
                     print(f"Rate limited (attempt {attempt + 1}). Waiting {wait_time}s...")
@@ -246,16 +243,22 @@ def demonstrate_comprehensive_error_handler():
                     continue
                 else:
                     return False, f"Rate limit exceeded after {max_retries} attempts: {e}"
-                    
-            except ServerError as e:
-                if attempt < max_retries - 1:
-                    wait_time = 2 ** attempt  # Exponential backoff
-                    print(f"Server error (attempt {attempt + 1}). Retrying in {wait_time}s...")
-                    time.sleep(wait_time)
-                    continue
+
+            except APIError as e:
+                # 404 -> not found; 5xx -> retryable server error
+                if e.status_code == 404:
+                    return False, f"Resource not found: {e}. Check model availability."
+                elif e.status_code is not None and e.status_code >= 500:
+                    if attempt < max_retries - 1:
+                        wait_time = 2 ** attempt  # Exponential backoff
+                        print(f"Server error (attempt {attempt + 1}). Retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        return False, f"Server error after {max_retries} attempts: {e}"
                 else:
-                    return False, f"Server error after {max_retries} attempts: {e}"
-                    
+                    return False, f"API error: {e}"
+
             except OpenRouterError as e:
                 return False, f"API error: {e}"
                 

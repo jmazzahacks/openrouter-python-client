@@ -11,7 +11,7 @@ from typing import List, Dict, Any
 from openrouter_client import OpenRouterClient, tool
 
 # Define functions using the @tool decorator
-@tool
+@tool()
 def get_weather(location: str, unit: str = "celsius") -> dict:
     """Get the current weather for a location.
     
@@ -33,7 +33,7 @@ def get_weather(location: str, unit: str = "celsius") -> dict:
     }
     return weather_data
 
-@tool  
+@tool()
 def search_restaurants(location: str, cuisine: str = "any", price_range: str = "medium") -> List[dict]:
     """Search for restaurants in a location.
     
@@ -66,7 +66,7 @@ def search_restaurants(location: str, cuisine: str = "any", price_range: str = "
     ]
     return restaurants
 
-@tool
+@tool()
 def calculate_tip(bill_amount: float, tip_percentage: float = 18.0) -> dict:
     """Calculate tip amount and total bill.
     
@@ -92,16 +92,14 @@ def main():
     api_key = os.environ.get("OPENROUTER_API_KEY", "your-api-key-here")
     
     client = OpenRouterClient(
-        api_key=api_key,
-        http_referer="https://your-site.com",
-        x_title="Function Calling Example"
+        api_key=api_key
     )
-    
+
     # Available tools
     available_tools = [
-        get_weather.to_dict(),
-        search_restaurants.to_dict(), 
-        calculate_tip.to_dict()
+        get_weather.as_chat_completion_tool,
+        search_restaurants.as_chat_completion_tool,
+        calculate_tip.as_chat_completion_tool
     ]
     
     # Example 1: Single function call
@@ -127,11 +125,11 @@ def main():
             
             # Execute the appropriate function
             if function_name == "get_weather":
-                result = get_weather.execute(tool_call.function.arguments)
+                result = get_weather(**json.loads(tool_call.function.arguments))
             elif function_name == "search_restaurants":
-                result = search_restaurants.execute(tool_call.function.arguments)
+                result = search_restaurants(**json.loads(tool_call.function.arguments))
             elif function_name == "calculate_tip":
-                result = calculate_tip.execute(tool_call.function.arguments)
+                result = calculate_tip(**json.loads(tool_call.function.arguments))
             else:
                 result = {"error": f"Unknown function: {function_name}"}
             
@@ -155,7 +153,7 @@ def main():
     )
     
     # Add assistant message to conversation
-    messages.append(response.choices[0].message.dict())
+    messages.append(response.choices[0].message.model_dump())
     
     # Process any tool calls
     if response.choices[0].message.tool_calls:
@@ -166,9 +164,9 @@ def main():
             
             # Execute function
             if function_name == "get_weather":
-                result = get_weather.execute(tool_call.function.arguments)
+                result = get_weather(**json.loads(tool_call.function.arguments))
             elif function_name == "search_restaurants":
-                result = search_restaurants.execute(tool_call.function.arguments)
+                result = search_restaurants(**json.loads(tool_call.function.arguments))
             else:
                 result = {"error": f"Unknown function: {function_name}"}
             
@@ -200,14 +198,14 @@ def main():
         messages=[
             {"role": "user", "content": "I had dinner that cost $85.50"}
         ],
-        tools=[calculate_tip.to_dict()],
+        tools=[calculate_tip.as_chat_completion_tool],
         tool_choice={"type": "function", "function": {"name": "calculate_tip"}}
     )
     
     # The model should be forced to call calculate_tip
     if response.choices[0].message.tool_calls:
         tool_call = response.choices[0].message.tool_calls[0]
-        result = calculate_tip.execute(tool_call.function.arguments)
+        result = calculate_tip(**json.loads(tool_call.function.arguments))
         print(f"Tip calculation: {json.dumps(result, indent=2)}")
 
 def demonstrate_complex_workflow():
@@ -217,7 +215,7 @@ def demonstrate_complex_workflow():
     api_key = os.environ.get("OPENROUTER_API_KEY", "your-api-key-here")
     client = OpenRouterClient(api_key=api_key)
     
-    tools = [get_weather.to_dict(), search_restaurants.to_dict(), calculate_tip.to_dict()]
+    tools = [get_weather.as_chat_completion_tool, search_restaurants.as_chat_completion_tool, calculate_tip.as_chat_completion_tool]
     
     messages = [
         {"role": "system", "content": "You are a helpful assistant that can help with weather, restaurants, and calculations."},
@@ -233,7 +231,7 @@ def demonstrate_complex_workflow():
         tools=tools
     )
     
-    conversation_messages = messages + [response.choices[0].message.dict()]
+    conversation_messages = messages + [response.choices[0].message.model_dump()]
     
     # Process all tool calls
     if response.choices[0].message.tool_calls:
@@ -243,11 +241,11 @@ def demonstrate_complex_workflow():
             function_name = tool_call.function.name
             
             if function_name == "get_weather":
-                result = get_weather.execute(tool_call.function.arguments)
+                result = get_weather(**json.loads(tool_call.function.arguments))
             elif function_name == "search_restaurants":
-                result = search_restaurants.execute(tool_call.function.arguments)
+                result = search_restaurants(**json.loads(tool_call.function.arguments))
             elif function_name == "calculate_tip":
-                result = calculate_tip.execute(tool_call.function.arguments)
+                result = calculate_tip(**json.loads(tool_call.function.arguments))
             else:
                 continue
             

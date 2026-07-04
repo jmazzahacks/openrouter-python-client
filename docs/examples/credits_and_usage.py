@@ -7,46 +7,40 @@ and manage API key information.
 
 import os
 import time
-from openrouter_client import OpenRouterClient
+from openrouter_client import OpenRouterClient, get_model
 
 def main():
     # Initialize the client
     api_key = os.environ.get("OPENROUTER_API_KEY", "your-api-key-here")
     
     client = OpenRouterClient(
-        api_key=api_key,
-        http_referer="https://your-site.com",
-        x_title="Credits and Usage Example"
+        api_key=api_key
     )
     
     # Example 1: Check credit balance and usage
     print("=== Credit Balance and Usage ===")
     
     try:
+        # credits.get() returns a plain dict:
+        #   {"data": {"total_credits": float, "total_usage": float}}
         credits_response = client.credits.get()
-        
+
         print("Credit Information:")
-        if hasattr(credits_response, 'data') and credits_response.data:
-            data = credits_response.data
-            if hasattr(data, 'credits'):
-                print(f"  Current Balance: ${data.credits:.6f}")
-            if hasattr(data, 'usage'):
-                print(f"  Total Usage: ${data.usage:.6f}")
-            if hasattr(data, 'limit'):
-                print(f"  Spending Limit: ${data.limit:.6f}")
-            
-            # Calculate remaining credits
-            if hasattr(data, 'credits') and hasattr(data, 'usage'):
-                remaining = data.credits - data.usage
-                print(f"  Remaining: ${remaining:.6f}")
-                
-                # Estimate requests possible
-                avg_cost_per_request = 0.001  # Rough estimate
-                estimated_requests = remaining / avg_cost_per_request
-                print(f"  Estimated requests remaining: ~{estimated_requests:,.0f}")
-        else:
-            print("  No credit data available")
-            
+        data = credits_response["data"]
+        total_credits = data["total_credits"]
+        total_usage = data["total_usage"]
+        print(f"  Total Credits Purchased: ${total_credits:.6f}")
+        print(f"  Total Usage: ${total_usage:.6f}")
+
+        # Calculate remaining credits
+        remaining = total_credits - total_usage
+        print(f"  Remaining: ${remaining:.6f}")
+
+        # Estimate requests possible
+        avg_cost_per_request = 0.001  # Rough estimate
+        estimated_requests = remaining / avg_cost_per_request
+        print(f"  Estimated requests remaining: ~{estimated_requests:,.0f}")
+
     except Exception as e:
         print(f"Error getting credits: {e}")
     
@@ -54,24 +48,20 @@ def main():
     print("\n=== API Key Information ===")
     
     try:
-        keys_response = client.keys.get()
-        
+        # keys.get_current() returns a plain dict:
+        #   {"data": {"label", "usage", "limit", "is_free_tier", "rate_limit": {...}}}
+        keys_response = client.keys.get_current()
+
         print("API Key Information:")
-        if hasattr(keys_response, 'data') and keys_response.data:
-            data = keys_response.data
-            if hasattr(data, 'label'):
-                print(f"  Label: {data.label}")
-            if hasattr(data, 'usage'):
-                print(f"  Usage: ${data.usage:.6f}")
-            if hasattr(data, 'limit'):
-                print(f"  Limit: ${data.limit:.6f}")
-            if hasattr(data, 'is_free_tier'):
-                print(f"  Free Tier: {data.is_free_tier}")
-            if hasattr(data, 'rate_limit'):
-                print(f"  Rate Limit: {data.rate_limit}")
-        else:
-            print("  No key data available")
-            
+        data = keys_response["data"]
+        print(f"  Label: {data.get('label')}")
+        if data.get('usage') is not None:
+            print(f"  Usage: ${data['usage']:.6f}")
+        if data.get('limit') is not None:
+            print(f"  Limit: ${data['limit']:.6f}")
+        print(f"  Free Tier: {data.get('is_free_tier')}")
+        print(f"  Rate Limit: {data.get('rate_limit')}")
+
     except Exception as e:
         print(f"Error getting key info: {e}")
     
@@ -98,7 +88,8 @@ def demonstrate_usage_monitoring():
     # Get initial credit balance
     try:
         initial_credits = client.credits.get()
-        initial_balance = initial_credits.data.credits if hasattr(initial_credits.data, 'credits') else 0
+        initial_data = initial_credits["data"]
+        initial_balance = initial_data["total_credits"] - initial_data["total_usage"]
         print(f"Initial balance: ${initial_balance:.6f}")
     except Exception as e:
         print(f"Could not get initial balance: {e}")
@@ -131,11 +122,15 @@ def demonstrate_usage_monitoring():
                 print(f"Token usage - Prompt: {usage.prompt_tokens}, "
                       f"Completion: {usage.completion_tokens}, "
                       f"Total: {usage.total_tokens}")
-                
-                # Estimate cost (rough calculation)
-                estimated_cost = (usage.prompt_tokens + usage.completion_tokens) * 0.00001
-                total_cost += estimated_cost
-                print(f"Estimated cost: ${estimated_cost:.6f}")
+
+                # Real inline cost is returned automatically on usage.cost
+                if usage.is_byok:
+                    # BYOK: usage.cost is 0.0; real spend is the upstream inference cost
+                    request_cost = usage.cost_details.upstream_inference_cost if usage.cost_details else 0.0
+                else:
+                    request_cost = usage.cost or 0.0
+                total_cost += request_cost
+                print(f"Cost: ${request_cost:.6f}")
             
             # Small delay between requests
             time.sleep(1)
@@ -143,12 +138,13 @@ def demonstrate_usage_monitoring():
         except Exception as e:
             print(f"Error with request {i}: {e}")
     
-    print(f"\nTotal estimated cost for {len(test_prompts)} requests: ${total_cost:.6f}")
-    
+    print(f"\nTotal cost for {len(test_prompts)} requests: ${total_cost:.6f}")
+
     # Get final credit balance
     try:
         final_credits = client.credits.get()
-        final_balance = final_credits.data.credits if hasattr(final_credits.data, 'credits') else 0
+        final_data = final_credits["data"]
+        final_balance = final_data["total_credits"] - final_data["total_usage"]
         actual_cost = initial_balance - final_balance
         print(f"Final balance: ${final_balance:.6f}")
         print(f"Actual cost: ${actual_cost:.6f}")
@@ -166,23 +162,20 @@ def demonstrate_budget_management():
         """Check budget status and return alerts."""
         try:
             credits_response = client.credits.get()
-            data = credits_response.data
-            
-            if not (hasattr(data, 'credits') and hasattr(data, 'usage') and hasattr(data, 'limit')):
-                return "Budget information not available"
-            
-            balance = data.credits
-            usage = data.usage
-            limit = data.limit
-            
-            if limit > 0:
-                usage_percentage = usage / limit
-                
+            data = credits_response["data"]
+
+            # Treat purchased credits as the budget ceiling.
+            total_credits = data["total_credits"]
+            usage = data["total_usage"]
+
+            if total_credits > 0:
+                usage_percentage = usage / total_credits
+
                 print(f"Budget Status:")
-                print(f"  Limit: ${limit:.2f}")
+                print(f"  Total Credits: ${total_credits:.2f}")
                 print(f"  Used: ${usage:.6f} ({usage_percentage:.1%})")
-                print(f"  Remaining: ${limit - usage:.6f}")
-                
+                print(f"  Remaining: ${total_credits - usage:.6f}")
+
                 if usage_percentage >= critical_threshold:
                     return f"🚨 CRITICAL: {usage_percentage:.1%} of budget used!"
                 elif usage_percentage >= warning_threshold:
@@ -190,8 +183,8 @@ def demonstrate_budget_management():
                 else:
                     return f"✅ Budget OK: {usage_percentage:.1%} used"
             else:
-                return "No spending limit set"
-                
+                return "No credits available"
+
         except Exception as e:
             return f"Error checking budget: {e}"
     
@@ -217,10 +210,10 @@ def demonstrate_budget_management():
             
             # Check against current balance
             credits_response = client.credits.get()
-            if hasattr(credits_response.data, 'credits'):
-                balance = credits_response.data.credits
-                days_remaining = balance / cost_per_day if cost_per_day > 0 else float('inf')
-                print(f"  Days remaining at current rate: {days_remaining:.1f}")
+            data = credits_response["data"]
+            balance = data["total_credits"] - data["total_usage"]
+            days_remaining = balance / cost_per_day if cost_per_day > 0 else float('inf')
+            print(f"  Days remaining at current rate: {days_remaining:.1f}")
                 
         except Exception as e:
             print(f"Error projecting usage: {e}")
@@ -238,8 +231,8 @@ def demonstrate_cost_optimization():
     print("1. Cost-Efficient Model Selection:")
     
     try:
-        models_response = client.models.list()
-        
+        models_response = client.models.list(details=True)
+
         # Find cheapest models that are still capable
         cheap_capable_models = []
         
@@ -299,15 +292,39 @@ def demonstrate_cost_optimization():
         
         if hasattr(batch_response, 'usage') and batch_response.usage:
             usage = batch_response.usage
-            estimated_cost = (usage.total_tokens / 1000) * 0.0005
+            # Real inline cost (returned automatically); 0.0 for BYOK requests
+            actual_cost = usage.cost or 0.0
             print(f"    Actual tokens used: {usage.total_tokens}")
-            print(f"    Estimated cost: ${estimated_cost:.6f}")
-            print(f"    Savings: ~{((separate_cost - estimated_cost) / separate_cost * 100):.1f}%")
+            print(f"    Actual cost: ${actual_cost:.6f}")
+            if separate_cost > 0:
+                print(f"    Savings: ~{((separate_cost - actual_cost) / separate_cost * 100):.1f}%")
         
         print(f"    Batch result: {batch_response.choices[0].message.content[:200]}...")
         
     except Exception as e:
         print(f"    Error with batch processing: {e}")
+
+def demonstrate_high_level_cost():
+    """Demonstrate reading cost via the high-level llm-style API."""
+    print("\n=== High-Level API Cost Tracking ===")
+
+    api_key = os.environ.get("OPENROUTER_API_KEY", "your-api-key-here")
+    client = OpenRouterClient(api_key=api_key)
+
+    model = get_model("anthropic/claude-3-haiku", client)
+
+    # Single prompt -> cost is available on model.last_usage after the call
+    answer = model.prompt("Give me a one-sentence fun fact about the ocean.")
+    print(f"Answer: {answer}")
+    if model.last_usage is not None:
+        print(f"Prompt cost: ${model.last_usage.cost or 0.0:.6f}")
+
+    # A conversation accumulates cost across turns via conversation.total_cost
+    conversation = model.conversation(system="You are a concise assistant.")
+    conversation.prompt("What is the tallest mountain on Earth?")
+    conversation.prompt("How tall is it in meters?")
+    print(f"Conversation total cost: ${conversation.total_cost:.6f}")
+
 
 if __name__ == "__main__":
     main()
@@ -315,3 +332,4 @@ if __name__ == "__main__":
     # demonstrate_usage_monitoring()
     # demonstrate_budget_management()
     # demonstrate_cost_optimization()
+    # demonstrate_high_level_cost()

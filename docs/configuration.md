@@ -10,65 +10,48 @@ This guide covers configuration options and customization for the OpenRouter Pyt
 from openrouter_client import OpenRouterClient
 
 client = OpenRouterClient(
-    api_key="your-api-key",                    # Required
+    api_key="your-api-key",                    # Required (falls back to OPENROUTER_API_KEY)
     base_url="https://openrouter.ai/api/v1",   # Default base URL
-    http_referer="https://your-site.com",      # Optional referer header
-    x_title="Your App Name",                   # Optional app name header
     timeout=30.0,                              # Request timeout in seconds
-    max_retries=3                              # Maximum retry attempts
 )
 ```
+
+The API key is encrypted in memory automatically whenever PyNaCl is installed;
+no flag is required. `timeout` (default `60.0`) is one of several tuning kwargs
+forwarded to the underlying HTTP layer — see the retry and rate-limiting sections
+below for `retry_config`, `retries`, and `backoff_factor`.
 
 ### Advanced Configuration
 
 ```python
-from openrouter_client import OpenRouterClient, AuthManager, HTTPManager
+from openrouter_client import OpenRouterClient, RetryConfig
 
-# Custom authentication manager
-auth_manager = AuthManager(
+# Opt in to 429 retry-with-backoff and tune the HTTP layer
+client = OpenRouterClient(
     api_key="your-api-key",
-    encrypt_key=True  # Encrypt API key in memory
-)
-
-# Custom HTTP manager with advanced settings
-http_manager = HTTPManager(
     base_url="https://openrouter.ai/api/v1",
     timeout=60.0,
-    max_retries=5,
-    retry_delay=1.0,                           # Base retry delay
-    retry_backoff=2.0,                         # Backoff multiplier
-    rate_limit_enabled=True,                   # Enable automatic rate limiting
-    rate_limit_buffer=0.1                      # Rate limit safety buffer (10%)
-)
-
-client = OpenRouterClient(
-    auth_manager=auth_manager,
-    http_manager=http_manager
+    retries=3,                                       # transport-level retries (default 3)
+    backoff_factor=0.5,                              # backoff multiplier (default 0.5)
+    retry_config=RetryConfig(enabled=True, max_retries=5),
 )
 ```
 
 ## Environment Variables
 
-The client supports several environment variables for configuration:
+The client reads exactly two environment variables:
 
 ```bash
-# API key (alternative to passing in code)
+# API key (alternative to passing api_key= in code)
 export OPENROUTER_API_KEY="your-api-key"
 
-# Base URL override
-export OPENROUTER_BASE_URL="https://custom-endpoint.com/api/v1"
-
-# Default headers
-export OPENROUTER_HTTP_REFERER="https://your-site.com"
-export OPENROUTER_X_TITLE="Your App Name"
-
-# Timeout and retry settings
-export OPENROUTER_TIMEOUT="60.0"
-export OPENROUTER_MAX_RETRIES="5"
-
-# Logging level
-export OPENROUTER_LOG_LEVEL="INFO"
+# Provisioning key (needed for credits and key-management endpoints)
+export OPENROUTER_PROVISIONING_API_KEY="your-provisioning-key"
 ```
+
+These are the only environment variables the client looks up. Everything else
+(base URL, timeout, retries, logging) is configured through constructor
+arguments or `configure_logging()`.
 
 Using environment variables:
 
@@ -134,87 +117,99 @@ client = OpenRouterClient(api_key="your-api-key")
 import logging
 from openrouter_client import configure_logging
 
-# Log to file
+# Log to file (the file argument is `to_file`, a path)
 configure_logging(
     level=logging.INFO,
-    filename="openrouter_client.log",
+    to_file="openrouter_client.log",
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 ```
 
 ## Custom Authentication
 
-### Basic Custom Authentication
+### Supplying keys through a custom SecretsManager
+
+Authentication is customized by plugging in a `SecretsManager`, not by
+subclassing `AuthManager`. The `SecretsManager` protocol requires a single
+method:
 
 ```python
-from openrouter_client import AuthManager, OpenRouterClient
+def get_key(self, name: str) -> bytearray:
+    ...
+```
 
-class CustomAuthManager(AuthManager):
-    """Custom authentication with additional headers."""
-    
-    def get_headers(self) -> dict:
-        """Get authentication headers."""
-        headers = super().get_headers()
-        headers.update({
-            "X-Custom-Header": "custom-value",
-            "User-Agent": "MyApp/1.0"
-        })
-        return headers
+`AuthManager` calls `get_key("OPENROUTER_API_KEY")` (and, when needed,
+`get_key("OPENROUTER_PROVISIONING_API_KEY")`) to resolve credentials, and
+raises `AuthenticationError` if the key is missing. The default is
+`EnvironmentSecretsManager`, which reads those names from the environment. Wire
+your own manager through the client constructor:
 
-auth_manager = CustomAuthManager(api_key="your-api-key")
-client = OpenRouterClient(auth_manager=auth_manager)
+```python
+from openrouter_client.auth import SecretsManager
+from openrouter_client.exceptions import AuthenticationError
+from openrouter_client import OpenRouterClient
+
+class DictSecretsManager(SecretsManager):
+    """Resolve keys from an in-memory mapping."""
+
+    def __init__(self, secrets: dict[str, str]):
+        self._secrets = secrets
+
+    def get_key(self, name: str) -> bytearray:
+        value = self._secrets.get(name)
+        if value is None:
+            raise AuthenticationError(f"Secret not found: {name}")
+        return bytearray(value, "utf-8")
+
+secrets_manager = DictSecretsManager({"OPENROUTER_API_KEY": "your-api-key"})
+client = OpenRouterClient(secrets_manager=secrets_manager)
 ```
 
 ### Secrets Management Integration
 
 ```python
-from openrouter_client.auth import SecretsManager, AuthManager
+import json
+from openrouter_client.auth import SecretsManager
+from openrouter_client.exceptions import AuthenticationError
 from openrouter_client import OpenRouterClient
 
 class AWSSecretsManager(SecretsManager):
     """Example AWS Secrets Manager integration."""
-    
+
     def __init__(self, secret_name: str, region: str):
         self.secret_name = secret_name
         self.region = region
-        # Initialize AWS client here
-    
-    def get_secret(self, key: str) -> str:
-        """Retrieve secret from AWS Secrets Manager."""
-        # Implement AWS Secrets Manager retrieval
-        # This is a simplified example
+        # Initialize the AWS client here
+
+    def get_key(self, name: str) -> bytearray:
+        """Retrieve a key (e.g. "OPENROUTER_API_KEY") from AWS Secrets Manager."""
         import boto3
-        
-        client = boto3.client('secretsmanager', region_name=self.region)
+
+        client = boto3.client("secretsmanager", region_name=self.region)
         response = client.get_secret_value(SecretId=self.secret_name)
-        secrets = json.loads(response['SecretString'])
-        return secrets.get(key)
-    
-    def set_secret(self, key: str, value: str) -> None:
-        """Store secret in AWS Secrets Manager."""
-        # Implement AWS Secrets Manager storage
-        pass
+        secrets = json.loads(response["SecretString"])
+        value = secrets.get(name)
+        if value is None:
+            raise AuthenticationError(f"Secret not found: {name}")
+        return bytearray(value, "utf-8")
 
 # Use with OpenRouter client
 secrets_manager = AWSSecretsManager("openrouter-secrets", "us-east-1")
-auth_manager = AuthManager(secrets_manager=secrets_manager)
-client = OpenRouterClient(auth_manager=auth_manager)
+client = OpenRouterClient(secrets_manager=secrets_manager)
 ```
 
 ## Rate Limiting Configuration
 
 ### Built-in Rate Limiting
 
-The client includes intelligent rate limiting via SmartSurge:
+The client applies rate limiting automatically. On construction it fetches the
+key's `rate_limit` and configures every endpoint accordingly (via SmartSurge),
+so no extra configuration is needed:
 
 ```python
 from openrouter_client import OpenRouterClient
 
-client = OpenRouterClient(
-    api_key="your-api-key",
-    max_retries=5,                    # Retry on rate limits
-    rate_limit_buffer=0.2             # 20% safety buffer
-)
+client = OpenRouterClient(api_key="your-api-key")
 
 # Rate limiting is automatic
 for i in range(100):
@@ -225,35 +220,44 @@ for i in range(100):
     print(f"Completed request {i}")
 ```
 
-### Custom Rate Limiting
+### Deriving and setting rate limits from credits
+
+`calculate_rate_limits()` derives limits from remaining credits and returns a
+dict with the keys `requests`, `period`, and `cooldown`. Feed that into
+`set_rate_limit()` to apply a custom limit:
 
 ```python
-from openrouter_client import HTTPManager, OpenRouterClient
-import time
+from openrouter_client import OpenRouterClient
 
-class CustomRateLimitHTTPManager(HTTPManager):
-    """Custom HTTP manager with additional rate limiting."""
-    
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.last_request_time = 0
-        self.min_request_interval = 1.0  # 1 second between requests
-    
-    def make_request(self, *args, **kwargs):
-        """Make request with custom rate limiting."""
-        # Enforce minimum interval between requests
-        now = time.time()
-        elapsed = now - self.last_request_time
-        if elapsed < self.min_request_interval:
-            time.sleep(self.min_request_interval - elapsed)
-        
-        self.last_request_time = time.time()
-        return super().make_request(*args, **kwargs)
+client = OpenRouterClient(api_key="your-api-key")
 
-http_manager = CustomRateLimitHTTPManager()
+limits = client.calculate_rate_limits()   # {"requests": ..., "period": ..., "cooldown": ...}
+client.set_rate_limit(
+    requests=limits["requests"],
+    period=limits["period"],
+    cooldown=limits["cooldown"],
+)
+```
+
+### Retry-with-backoff on 429s
+
+Retries are opt-in and configured only through `RetryConfig` (there is no
+`max_retries` constructor argument):
+
+```python
+from openrouter_client import OpenRouterClient, RetryConfig
+
 client = OpenRouterClient(
     api_key="your-api-key",
-    http_manager=http_manager
+    retry_config=RetryConfig(
+        enabled=True,          # off by default
+        max_retries=5,
+        base_delay=1.0,
+        factor=2.0,
+        max_delay=30.0,
+        jitter=0.25,
+        respect_retry_after=True,
+    ),
 )
 ```
 
@@ -263,7 +267,7 @@ client = OpenRouterClient(
 
 ```python
 from openrouter_client import OpenRouterClient
-from openrouter_client.exceptions import NotFoundError, ServerError
+from openrouter_client.exceptions import APIError, OpenRouterError
 
 class FallbackClient:
     """Client with automatic model fallbacks."""
@@ -286,7 +290,13 @@ class FallbackClient:
                     messages=messages,
                     **kwargs
                 )
-            except (NotFoundError, ServerError) as e:
+            except APIError as e:
+                # 404 (unknown model) or 5xx (server error) -> try the next model
+                if e.status_code == 404 or (e.status_code or 0) >= 500:
+                    print(f"Model {model} failed ({e.status_code}): {e}")
+                    continue
+                raise
+            except OpenRouterError as e:
                 print(f"Model {model} failed: {e}")
                 continue
         
@@ -323,8 +333,8 @@ class CostOptimizedClient:
         """Select most capable model within cost budget."""
         token_count = self.estimate_tokens(messages)
         
-        # Get model pricing
-        models = self.client.models.list()
+        # Get model pricing (details=True returns ModelData objects, not id strings)
+        models = self.client.models.list(details=True)
         suitable_models = []
         
         for model in models.data:
@@ -421,20 +431,15 @@ openrouter:
   api_key: "your-api-key"
   base_url: "https://openrouter.ai/api/v1"
   timeout: 30.0
-  max_retries: 3
-  
-  headers:
-    http_referer: "https://your-site.com"
-    x_title: "Your App Name"
-  
-  rate_limiting:
+
+  retry:
     enabled: true
-    buffer: 0.1
-  
+    max_retries: 5
+
   logging:
     level: "INFO"
     format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  
+
   models:
     preferred: ["anthropic/claude-3-opus", "openai/gpt-4-turbo"]
     fallback: ["openai/gpt-3.5-turbo"]
@@ -442,7 +447,7 @@ openrouter:
 
 ```python
 import yaml
-from openrouter_client import OpenRouterClient
+from openrouter_client import OpenRouterClient, RetryConfig
 
 def load_config(config_file: str):
     """Load configuration from YAML file."""
@@ -453,14 +458,16 @@ def load_config(config_file: str):
 def create_client_from_config(config_file: str):
     """Create client from YAML configuration."""
     config = load_config(config_file)
-    
+
+    retry = config.get('retry', {})
     return OpenRouterClient(
         api_key=config['api_key'],
         base_url=config.get('base_url'),
         timeout=config.get('timeout'),
-        max_retries=config.get('max_retries'),
-        http_referer=config.get('headers', {}).get('http_referer'),
-        x_title=config.get('headers', {}).get('x_title')
+        retry_config=RetryConfig(
+            enabled=retry.get('enabled', False),
+            max_retries=retry.get('max_retries', 5),
+        ),
     )
 
 # Usage
@@ -475,14 +482,9 @@ client = create_client_from_config("openrouter_config.yaml")
     "api_key": "your-api-key",
     "base_url": "https://openrouter.ai/api/v1",
     "timeout": 30.0,
-    "max_retries": 3,
-    "headers": {
-      "http_referer": "https://your-site.com",
-      "x_title": "Your App Name"
-    },
-    "rate_limiting": {
+    "retry": {
       "enabled": true,
-      "buffer": 0.1
+      "max_retries": 5
     }
   }
 }
@@ -490,20 +492,22 @@ client = create_client_from_config("openrouter_config.yaml")
 
 ```python
 import json
-from openrouter_client import OpenRouterClient
+from openrouter_client import OpenRouterClient, RetryConfig
 
 def create_client_from_json(config_file: str):
     """Create client from JSON configuration."""
     with open(config_file, 'r') as f:
         config = json.load(f)['openrouter']
-    
+
+    retry = config.get('retry', {})
     return OpenRouterClient(
         api_key=config['api_key'],
         base_url=config.get('base_url'),
         timeout=config.get('timeout'),
-        max_retries=config.get('max_retries'),
-        http_referer=config.get('headers', {}).get('http_referer'),
-        x_title=config.get('headers', {}).get('x_title')
+        retry_config=RetryConfig(
+            enabled=retry.get('enabled', False),
+            max_retries=retry.get('max_retries', 5),
+        ),
     )
 
 client = create_client_from_json("openrouter_config.json")

@@ -49,9 +49,7 @@ def main():
     api_key = os.environ.get("OPENROUTER_API_KEY", "your-api-key-here")
     
     client = OpenRouterClient(
-        api_key=api_key,
-        http_referer="https://your-site.com",
-        x_title="Prompt Caching Example"
+        api_key=api_key
     )
     
     # Example 1: Basic prompt caching with Anthropic Claude
