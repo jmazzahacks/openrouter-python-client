@@ -562,9 +562,13 @@ class Test_ToolLoop_06_ReviewRegressions:
         assert model.last_usage.cost == pytest.approx(0.003)
 
     def test_schema_turn_is_not_sent_as_an_assistant_prefill(self):
-        # Tool rounds end on an assistant turn; issuing the schema call on that
-        # history reads as a prefill to Anthropic-family models, which continue
-        # the prose instead of emitting a fresh object.
+        # Tool rounds end on an assistant turn. claude-sonnet-5 and
+        # claude-opus-5 reject an assistant-last conversation with a hard 400
+        # ("This model does not support assistant message prefill. The
+        # conversation must end with a user message.") — verified live via
+        # OpenRouter 2026-08-30. Deleting the instruction breaks schema +
+        # tool_loop on those models; claude-haiku-4.5 accepts it, so this must
+        # be pinned here rather than left to a spot check.
         seen_roles = []
 
         def record(**kwargs):
@@ -940,9 +944,7 @@ class Test_ToolLoop_09_FourthReviewRegressions:
         # {content: null, tool_calls: null} (reasoning-only output, content
         # filter, length stop) escaped as None where the docs promise str.
         client = _client_returning(_response(content=None))
-        result = LLMModel("test/model", client).prompt(
-            "hi", tool_loop=_weather_loop()
-        )
+        result = LLMModel("test/model", client).prompt("hi", tool_loop=_weather_loop())
 
         assert result == ""
 
@@ -1030,7 +1032,7 @@ class Test_ToolLoop_09_FourthReviewRegressions:
 
         time_loop = ToolLoop(tools=[TIME_TOOL], handlers={"get_time": get_time})
         client = _client_returning(
-            _response(tool_calls=[_tool_call()]),      # turn 1 uses get_weather
+            _response(tool_calls=[_tool_call()]),  # turn 1 uses get_weather
             _response(content="sunny"),
             _response(tool_calls=[_tool_call(name="get_time", arguments="")]),
             _response(content="it is noon"),

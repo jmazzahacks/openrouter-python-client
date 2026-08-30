@@ -247,12 +247,12 @@ The two are kept deliberately apart, in this order:
 
 That final call appends a short `role="user"` instruction asking for the
 structured answer, so you will see one extra user turn in `conversation.messages`
-for a schema'd tool turn. The reasoning was that tool rounds end on an assistant
-message and a request whose last message is from the assistant can read as an
-*assistant prefill*, with the model continuing the prose instead of emitting a
-fresh object. That did not reproduce (see *Verified behavior*); the instruction
-is kept because asking for the structured answer explicitly is useful in its own
-right, but it is not compensating for a measured provider quirk.
+for a schema'd tool turn. **This is required, not cosmetic.** Tool rounds end on
+an assistant message, and Claude Sonnet 5 and Opus 5 reject an assistant-last
+conversation outright — *"This model does not support assistant message prefill.
+The conversation must end with a user message."* Without the instruction,
+`schema` plus `tool_loop` would fail with a hard 400 on those models after every
+tool round had already been paid for (see *Verified behavior*).
 
 ```python
 report = conversation.prompt(
@@ -272,41 +272,45 @@ request. Using `schema` without `tool_loop` is unchanged — still exactly one c
 
 The provider claims behind this design are load-bearing, so they were checked
 against live APIs on **2026-08-30**: OpenAI `gpt-4o-mini` (driving this library
-at `base_url="https://api.openai.com/v1"`) and `anthropic/claude-haiku-4.5`
-through OpenRouter.
+at `base_url="https://api.openai.com/v1"`), and `claude-haiku-4.5`,
+`claude-sonnet-5` and `claude-opus-5` through OpenRouter.
 
-| Claim | OpenAI | Anthropic (via OpenRouter) |
-|---|---|---|
-| Tool loop executes handlers and returns an answer | works | works |
-| Tool loop + `schema` returns a validated dict | works | works |
-| Tool turn then tool-free follow-up | works | works |
-| `tool_choice="required"` forces a call even when told not to use tools | **confirmed** | not retested |
-| `tool_choice` with no `tools` | rejected, HTTP 400 | not retested |
-| `parallel_tool_calls` with no `tools` | rejected, HTTP 400 | not retested |
-| A transcript with tool calls, sent with **no** `tools` defined | accepted | **accepted** |
-| `tools` + strict `json_schema` in one request | accepted, tool calls still emitted | **accepted, tool calls still emitted** |
-| History ending on an assistant message + `response_format` | not retested | **accepted, fresh JSON object returned** |
+| Claim | OpenAI | Haiku 4.5 | Sonnet 5 / Opus 5 |
+|---|---|---|---|
+| Tool loop executes handlers and returns an answer | works | works | works |
+| Tool loop + `schema` returns a validated dict | works | works | works |
+| Tool turn then tool-free follow-up | works | works | not retested |
+| `tool_choice="required"` forces a call even when told not to use tools | **confirmed** | **confirmed** | **confirmed** |
+| `tool_choice` with no `tools` | rejected, 400 | not retested | not retested |
+| `parallel_tool_calls` with no `tools` | rejected, 400 | not retested | not retested |
+| A transcript with tool calls, sent with **no** `tools` defined | accepted | accepted | accepted |
+| `tools` + strict `json_schema` in one request | accepted, tool calls still emitted | same | same |
+| **History ending on an assistant message** | not retested | accepted | **rejected, HTTP 400** |
 
-**Three of the provider limitations this design was built around did not
-reproduce on either provider tested.** Stated plainly, because the code comments
-used to assert them as fact:
+**The tiers disagree, and only on the last row — which is the one that matters
+most.** Sonnet 5 and Opus 5 both refuse an assistant-last conversation outright,
+with or without `response_format`:
 
-- **Neither provider suppresses tool calling under a strict schema.** Both
-  accepted `tools` together with a strict `json_schema` and still emitted tool
-  calls. The two-phase split therefore buys portability, not correctness, on
-  both — and costs one extra completion per `prompt()`.
-- **Neither provider rejected a tool-carrying transcript sent without `tools`.**
-  Re-sending the retained definitions on follow-up turns is insurance, not a fix
-  for an observed rejection, and it re-bills the tool schemas each turn.
-- **Assistant-last did not behave as a prefill.** Anthropic via OpenRouter
-  returned a fresh schema-conforming object rather than continuing the prose,
-  and did not reject the combination.
+> `invalid_request_error: This model does not support assistant message prefill.
+> The conversation must end with a user message.`
 
-The mechanisms are all validated as *working*; what changed is the
-justification. Everything in the first table's top three rows passed end to end
-on both providers. If you are optimizing cost, the extra schema completion and
-the re-sent definitions are the two things to revisit — with the caveat that
-only one model per family was exercised, both routed through normalizing layers.
+Haiku 4.5 accepts the same request. So the `role="user"` instruction the schema
+turn appends is **load-bearing on the flagship models** — without it, `schema`
+together with `tool_loop` would fail with a hard 400 on Sonnet and Opus, after
+every tool round had already been paid for. Testing Haiku alone produced the
+opposite (wrong) conclusion.
+
+The other two suspected limitations did *not* reproduce anywhere, at any tier:
+
+- **No provider suppressed tool calling under a strict schema.** All accepted
+  `tools` together with a strict `json_schema` and still emitted tool calls. The
+  two-phase split buys portability, not correctness, and costs one extra
+  completion per schema'd turn.
+- **No provider rejected a tool-carrying transcript sent without `tools`.**
+  Re-sending the retained definitions is insurance, not a fix for an observed
+  rejection, and it re-bills the tool schemas each turn.
+
+Those two remain candidates for simplification. The prefill instruction is not.
 
 #### Errors
 

@@ -636,13 +636,14 @@ def _run_schema_turn(
     one imposes. ``messages`` is appended to in place.
 
     A short user-role instruction is appended before the call, restoring a
-    normal user-turn-last shape. The reasoning was that a request whose last
-    message is from the assistant can read as a prefill, with the model
-    continuing the prose instead of emitting a fresh object. That did not
-    reproduce on 2026-08-30 (anthropic/claude-haiku-4.5 via OpenRouter returned
-    a fresh schema-conforming object from an assistant-last history), so the
-    instruction stands on its own merit — explicitly asking for the structured
-    answer — rather than on a measured provider quirk.
+    user-turn-last shape. THIS IS REQUIRED, not cosmetic: the tool rounds end on
+    an assistant turn, and claude-sonnet-5 and claude-opus-5 reject an
+    assistant-last conversation with a hard 400 — "This model does not support
+    assistant message prefill. The conversation must end with a user message."
+    (verified via OpenRouter 2026-08-30, with and without response_format).
+    Removing this line breaks schema + tool_loop on those models after every
+    tool round has already been paid for. claude-haiku-4.5 accepts assistant-last,
+    so a Haiku-only check will not catch a regression here.
 
     Args:
         client: The OpenRouter client to issue completions with.
