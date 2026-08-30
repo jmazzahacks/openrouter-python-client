@@ -232,17 +232,18 @@ executing that batch. Handlers with side effects never run past the budget.
 
 The two are kept deliberately apart, in this order:
 
-1. **Tool rounds** are sent with `tools` attached and **no** `response_format`.
-   The model can call tools freely without its output being constrained to a
-   JSON grammar — some providers cannot emit a tool call while a strict schema
-   is enforced, which would silently suppress tool use.
+1. **Tool rounds** are sent with `tools` attached and **no** `response_format`,
+   so tool calling is never subject to a provider constraining output to a JSON
+   grammar. Note that OpenAI supports the combined form (see *Verified
+   behavior* below) — the separation is portability insurance, not a workaround
+   for a limitation observed there.
 2. Once the model stops requesting tools, **one final call** is made with
    `response_format` attached, the tool definitions still included, and
-   `tool_choice="none"`. The definitions must travel — the transcript is full of
-   tool calls and tool results, and Anthropic-family providers reject a request
-   that references tools it does not define — while `"none"` stops the model
-   opening another round. That response is parsed and validated, and is what
-   `prompt()` returns.
+   `tool_choice="none"`. The definitions travel because the transcript is full
+   of tool calls and tool results, and Anthropic's API requires a request
+   carrying those blocks to define the tools; `"none"` stops the model opening
+   another round. That response is parsed and validated, and is what `prompt()`
+   returns.
 
 That final call appends a short `role="user"` instruction asking for the
 structured answer, so you will see one extra user turn in `conversation.messages`
@@ -266,6 +267,32 @@ The cost of this design is one extra completion per `prompt()` compared to
 whether a given provider supports tool calls and structured output in the same
 request. Using `schema` without `tool_loop` is unchanged — still exactly one call.
 
+#### Verified behavior
+
+The provider claims above are load-bearing, so they were checked against a live
+API on **2026-08-30** (OpenAI `gpt-4o-mini`, driving this library at
+`base_url="https://api.openai.com/v1"`):
+
+| Claim | Result |
+|---|---|
+| Tool loop executes handlers and returns an answer | works |
+| Schema turn (`tools` + `tool_choice="none"` + `response_format`) is accepted | works |
+| `tool_choice="required"` forces a call even when told not to use tools | **confirmed** — this is why it is relaxed after round one |
+| `tool_choice` with no `tools` | rejected, HTTP 400 |
+| `parallel_tool_calls` with no `tools` | rejected, HTTP 400 |
+| A transcript with tool calls, sent with no `tools` defined | **accepted by OpenAI** |
+| `tools` + strict `json_schema` in one request | **accepted, and tool calls are still emitted** |
+
+Two things follow, stated plainly:
+
+- **OpenAI does not need the two-phase split.** It happily combines `tools` with
+  a strict schema and still calls tools, so the extra completion buys
+  portability, not correctness, on that provider.
+- **The Anthropic-specific claims here are not verified.** Anthropic's documented
+  requirement that tool-carrying transcripts define their tools is the reason
+  the definitions are re-sent, but no Anthropic-routed model was exercised.
+  Treat those two rows as reasoned-but-untested.
+
 #### Errors
 
 | Situation | Raised |
@@ -287,9 +314,9 @@ with `"none"` and `parallel_tool_calls` is dropped as moot.
 **Follow-up turns keep working.** After a tool-loop turn that actually recorded
 tool calls in the transcript, the conversation remembers the loop's tool
 definitions (a copy, not your list) and re-sends them with `tool_choice="none"`
-on later tool-free `prompt()` calls. This is required by Anthropic-family
-providers, which reject a transcript containing tool calls or tool results
-unless the tools are also defined on the request. A turn where the model never
+on later tool-free `prompt()` calls. Anthropic's API requires a request carrying
+tool-use or tool-result blocks to define the tools; OpenAI accepts it either way
+(see *Verified behavior*), so this is portability insurance. A turn where the model never
 called a tool retains nothing — no schemas are re-billed for it. `clear()`
 forgets the retained definitions along with the history; an explicit non-None
 `tools=` or `tool_choice=` from you wins. Passing your own `tools=` with

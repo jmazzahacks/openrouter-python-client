@@ -546,9 +546,13 @@ def _run_tool_rounds(
     """
     Call the model with tools attached until it answers without requesting more.
 
-    No ``response_format`` is sent here, so tool calling is never constrained by
-    a JSON grammar. ``messages`` is appended to in place with every assistant
-    turn (tool_calls included) and every tool result.
+    No ``response_format`` is sent here, so tool calling is never subject to a
+    provider constraining output to a JSON grammar. Verified 2026-08-30 against
+    OpenAI (gpt-4o-mini): it accepts tools together with a strict json_schema
+    and still emits tool calls, so for that provider this separation is a
+    precaution rather than a fix — it is kept because provider support for the
+    combination cannot be feature-detected. ``messages`` is appended to in place
+    with every assistant turn (tool_calls included) and every tool result.
 
     A caller's ``tool_choice`` is honored on the FIRST round only. "required"
     (or a named function) forced on every round makes the exit condition — a
@@ -621,9 +625,12 @@ def _run_schema_turn(
     Make the final structured call, with the schema enforced and tools disabled.
 
     The tool definitions ARE sent — the transcript is full of tool_calls and
-    role="tool" messages, and some providers (Anthropic-family) reject any
-    request referencing tools it does not define — but with tool_choice="none",
-    so the model cannot open another round and must settle on the answer.
+    role="tool" messages, and Anthropic's API requires a request carrying those
+    blocks to also define the tools — but with tool_choice="none", so the model
+    cannot open another round and must settle on the answer. Verified
+    2026-08-30 that OpenAI accepts this exact shape (tools + tool_choice="none"
+    + response_format); OpenAI also accepts the transcript with no tools at all,
+    so sending them is the portable choice rather than a universal requirement.
     ``messages`` is appended to in place.
 
     A short user-role instruction is appended before the call. The tool rounds
@@ -968,12 +975,14 @@ class Conversation:
         self.total_usage: Optional[Usage] = None
         # Tool definitions (and their handlers) accumulated from tool-loop turns
         # whose transcripts actually recorded tool activity. Once the history
-        # contains tool_calls / role="tool" messages, some providers
-        # (Anthropic-family) reject any request that does not also define the
-        # tools — so later prompt() calls re-send these, and a later turn's
-        # ToolLoop is merged with them rather than replacing them (its history
-        # still references the earlier loop's tools). Copies, never the caller's
-        # own list, so mutating a ToolLoop after the turn cannot leak here.
+        # contains tool_calls / role="tool" messages, Anthropic's API requires
+        # the request to define those tools — so later prompt() calls re-send
+        # these, and a later turn's ToolLoop is merged with them rather than
+        # replacing them (its history still references the earlier loop's
+        # tools). Copies, never the caller's own list, so mutating a ToolLoop
+        # after the turn cannot leak here. Verified 2026-08-30 that OpenAI
+        # accepts such a transcript either way, so this is portability
+        # insurance there, not a fix for an observed OpenAI rejection.
         self._history_tools: Optional[List[Any]] = None
         self._history_handlers: Dict[str, Callable[..., Any]] = {}
 
