@@ -10,8 +10,6 @@ Exported:
 
 from typing import Any, Dict, Iterator, List, Optional, Union
 
-from pydantic import BaseModel
-
 from ..auth import AuthManager
 from ..exceptions import ResumeError, StreamingError
 from ..http import HTTPManager
@@ -30,7 +28,7 @@ from ..models.chat import (
     ToolCallFunction,
     Usage,
 )
-from ..models.core import FunctionDefinition, ResponseFormat
+from ..models.core import FunctionDefinition, ResponseFormat, to_plain_data
 from ..streaming import StreamingChatCompletionsRequest
 from ..types import FinishReason
 from .base import BaseEndpoint
@@ -522,24 +520,19 @@ class ChatEndpoint(BaseEndpoint):
             data["frequency_penalty"] = frequency_penalty
         if user is not None:
             data["user"] = user
+        # to_plain_data on the tool-family params: they are documented as
+        # pydantic types (ChatCompletionTool, FunctionParameters,
+        # FunctionToolChoice) and may nest models inside plain dicts, but data
+        # goes to requests as json=, which cannot encode a pydantic model.
+        # Message and ReasoningConfig already get this treatment above/below.
         if functions is not None:
-            data["functions"] = functions
+            data["functions"] = to_plain_data(functions)
         if function_call is not None:
-            data["function_call"] = function_call
+            data["function_call"] = to_plain_data(function_call)
         if tools is not None:
-            # Dump pydantic tool models to dicts: data goes to requests as
-            # json=, which cannot encode a ChatCompletionTool. Message and
-            # ReasoningConfig already get this treatment above/below.
-            data["tools"] = [
-                (
-                    tool_def.model_dump(exclude_none=True)
-                    if isinstance(tool_def, BaseModel)
-                    else tool_def
-                )
-                for tool_def in tools
-            ]
+            data["tools"] = to_plain_data(tools)
         if tool_choice is not None:
-            data["tool_choice"] = tool_choice
+            data["tool_choice"] = to_plain_data(tool_choice)
         if response_format is not None:
             data["response_format"] = response_format
         if reasoning is not None:

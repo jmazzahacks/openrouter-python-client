@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, field_validator
 from ..exceptions import APIError, ToolCallLimitExceeded, ToolExecutionError
 from .attachment import Attachment
 from .chat import ChatCompletionResponse, Usage
+from .core import to_plain_data
 
 if TYPE_CHECKING:
     from ..client import OpenRouterClient
@@ -295,16 +296,20 @@ def _content_text(content: Any) -> Optional[str]:
 
     Message.content may be a list of content parts rather than a string; the
     prompt() contract promises str (or a parsed dict via schema), so the text
-    parts are joined. History keeps the structured form — this is only for what
-    the caller receives and for schema parsing.
+    parts are joined and a null (reasoning-only output, content filter, length
+    stop) becomes "". History keeps the raw form — this is only for what the
+    caller receives and for schema parsing, where "" raises the clear
+    empty-response APIError.
 
     Args:
         content: The content as it came off the response message.
 
     Returns:
-        Optional[str]: The content as text; None passes through unchanged.
+        Optional[str]: The content as text ("" when the model sent none).
     """
-    if content is None or isinstance(content, str):
+    if content is None:
+        return ""
+    if isinstance(content, str):
         return content
 
     parts = _plain_content(content)
@@ -420,13 +425,7 @@ def _plain_content(content: Any) -> Any:
     Returns:
         Any: The value with all Pydantic models dumped to dicts.
     """
-    if isinstance(content, BaseModel):
-        return content.model_dump(exclude_none=True)
-    if isinstance(content, list):
-        return [_plain_content(part) for part in content]
-    if isinstance(content, dict):
-        return {key: _plain_content(value) for key, value in content.items()}
-    return content
+    return to_plain_data(content)
 
 
 def _assistant_message(message: Any) -> Dict[str, Any]:
@@ -615,13 +614,17 @@ def _run_schema_turn(
     model_id: str,
     messages: List[Dict[str, Any]],
     schema: Dict[str, Any],
+    tools: List[Any],
     chat_kwargs: Dict[str, Any],
 ) -> TurnResult:
     """
-    Make the final structured call, with the schema enforced and tools withheld.
+    Make the final structured call, with the schema enforced and tools disabled.
 
-    Withholding tools is what makes the model settle on an answer rather than
-    opening another round. ``messages`` is appended to in place.
+    The tool definitions ARE sent — the transcript is full of tool_calls and
+    role="tool" messages, and some providers (Anthropic-family) reject any
+    request referencing tools it does not define — but with tool_choice="none",
+    so the model cannot open another round and must settle on the answer.
+    ``messages`` is appended to in place.
 
     A short user-role instruction is appended before the call. The tool rounds
     end on an assistant turn, and a request whose last message is from the
@@ -635,6 +638,7 @@ def _run_schema_turn(
         model_id: Model to call.
         messages: Conversation history, appended to in place.
         schema: JSON schema the answer must conform to.
+        tools: The loop's tool definitions, sent so the transcript stays valid.
         chat_kwargs: Extra parameters forwarded to chat.create().
 
     Returns:
@@ -642,12 +646,14 @@ def _run_schema_turn(
     """
     messages.append({"role": "user", "content": SCHEMA_TURN_INSTRUCTION})
 
-    # Tools-dependent kwargs are meaningful during the tool rounds but not here,
-    # where tools are withheld on purpose: providers reject them with no tools.
+    # The caller's tool_choice belongs to the tool rounds; here it is forced to
+    # "none". parallel_tool_calls is dropped as moot with tool calling disabled.
     tools_only_keys = {"tool_choice", "parallel_tool_calls"}
     extra = {
         key: value for key, value in chat_kwargs.items() if key not in tools_only_keys
     }
+    extra["tools"] = tools
+    extra["tool_choice"] = "none"
     extra["response_format"] = build_json_schema_response_format(schema)
 
     response = _create_completion(client, model_id, messages, extra)
@@ -726,7 +732,9 @@ def _run_tool_loop(
         if not schema:
             return rounds
 
-        final = _run_schema_turn(client, model_id, messages, schema, chat_kwargs)
+        final = _run_schema_turn(
+            client, model_id, messages, schema, tool_loop.tools, chat_kwargs
+        )
     except BaseException:
         # BaseException so a KeyboardInterrupt mid-loop also rolls back; the
         # history must never keep an assistant turn with unanswered tool_calls.
@@ -749,13 +757,19 @@ def _warn_if_tools_ignored(
 
     Tools sent this way do reach the API, but nothing runs the resulting tool
     calls and their content is typically null — the silent no-op this warning
-    exists to make audible.
+    exists to make audible. tool_choice="none" is the sanctioned exception:
+    it makes tool calls impossible, so definitions-only requests (the documented
+    override for a tooled conversation's follow-up turns) stay silent.
 
     Args:
         tool_loop: The tool loop for this call, if any.
         kwargs: Extra parameters headed for chat.create().
     """
-    if tool_loop is None and kwargs.get("tools"):
+    if (
+        tool_loop is None
+        and kwargs.get("tools")
+        and kwargs.get("tool_choice") != "none"
+    ):
         warnings.warn(
             "tools= was passed without tool_loop=, so any tool calls the model makes "
             "will not be executed and the response content will likely be empty. "
@@ -857,15 +871,18 @@ class LLMModel:
 
         response = self.client.chat.create(**chat_params)
 
+        content = response.choices[0].message.content
+
+        # Parse before recording usage: last_usage is documented as updated only
+        # on success, and a schema-parse failure is a failed prompt().
+        if schema:
+            parsed = parse_schema_response(content, schema)
+            self.last_usage = response.usage
+            return parsed
+
         # Capture this call's token/cost usage (None if the response carried no
         # usage block).
         self.last_usage = response.usage
-
-        content = response.choices[0].message.content
-
-        # Parse and validate JSON if schema was provided
-        if schema:
-            return parse_schema_response(content, schema)
 
         return content
 
@@ -880,6 +897,52 @@ class LLMModel:
             Conversation: A conversation object that maintains message history
         """
         return Conversation(self.model_id, self.client, system)
+
+
+def _tool_name(definition: Any) -> Optional[str]:
+    """
+    Extract the function name from a (normalized, plain-dict) tool definition.
+
+    Args:
+        definition: One entry from ToolLoop.tools after validation.
+
+    Returns:
+        Optional[str]: The function name, or None if the shape is unnamed.
+    """
+    if isinstance(definition, dict):
+        function = definition.get("function")
+        if isinstance(function, dict):
+            name = function.get("name")
+            if isinstance(name, str):
+                return name
+    return None
+
+
+def _merge_tool_definitions(retained: List[Any], new: List[Any]) -> List[Any]:
+    """
+    Merge two tool-definition lists, the newer definition winning by name.
+
+    Used when a conversation's history already references one ToolLoop's tools
+    and a later turn brings another: the request must define every tool the
+    transcript mentions, so the sets are combined rather than replaced.
+
+    Args:
+        retained: Definitions the conversation's history already references.
+        new: The current turn's definitions.
+
+    Returns:
+        List[Any]: A new list — named tools deduplicated (new wins), unnamed
+        shapes kept once.
+    """
+    by_name: Dict[str, Any] = {}
+    unnamed: List[Any] = []
+    for definition in retained + new:
+        name = _tool_name(definition)
+        if name is not None:
+            by_name[name] = definition
+        elif definition not in unnamed:
+            unnamed.append(definition)
+    return list(by_name.values()) + unnamed
 
 
 class Conversation:
@@ -903,11 +966,16 @@ class Conversation:
         # safe for concurrent prompt() calls.
         self.last_usage: Optional[Usage] = None
         self.total_usage: Optional[Usage] = None
-        # Tool definitions from the most recent successful tool-loop turn. Once
-        # the history contains tool_calls / role="tool" messages, some providers
+        # Tool definitions (and their handlers) accumulated from tool-loop turns
+        # whose transcripts actually recorded tool activity. Once the history
+        # contains tool_calls / role="tool" messages, some providers
         # (Anthropic-family) reject any request that does not also define the
-        # tools — so later tool-free prompt() calls re-send these.
+        # tools — so later prompt() calls re-send these, and a later turn's
+        # ToolLoop is merged with them rather than replacing them (its history
+        # still references the earlier loop's tools). Copies, never the caller's
+        # own list, so mutating a ToolLoop after the turn cannot leak here.
         self._history_tools: Optional[List[Any]] = None
+        self._history_handlers: Dict[str, Callable[..., Any]] = {}
 
         # Add system message if provided
         if system:
@@ -972,9 +1040,28 @@ class Conversation:
         # result to this conversation's history as it goes. The schema parse is
         # inside the guard because it, too, can fail on a completed turn.
         if tool_loop is not None:
+            # If earlier turns left tool activity in the history, the request
+            # must still define those tools — merge them (and their handlers)
+            # into this turn's loop rather than letting it replace them.
+            effective_loop = tool_loop
+            if self._history_tools:
+                effective_loop = tool_loop.model_copy(
+                    update={
+                        "tools": _merge_tool_definitions(
+                            self._history_tools, tool_loop.tools
+                        ),
+                        "handlers": {**self._history_handlers, **tool_loop.handlers},
+                    }
+                )
+
             try:
                 result = _run_tool_loop(
-                    self.client, self.model_id, self.messages, tool_loop, schema, kwargs
+                    self.client,
+                    self.model_id,
+                    self.messages,
+                    effective_loop,
+                    schema,
+                    kwargs,
                 )
                 # Parse before recording usage: last_usage/total_usage are
                 # documented as updated only on a successful turn, and a
@@ -987,9 +1074,26 @@ class Conversation:
                 # turn must be undone entirely or kept entirely.
                 del self.messages[history_depth:]
                 raise
+
             self.last_usage = result.usage
             self.total_usage = _accumulate_usage(self.total_usage, self.last_usage)
-            self._history_tools = tool_loop.tools
+
+            # Retain definitions only when this turn actually put tool activity
+            # into the transcript; a turn the model answered without tools
+            # obliges nothing, and re-sending schemas forever costs tokens.
+            turn_messages = self.messages[history_depth:]
+            if any(
+                message.get("tool_calls") or message.get("role") == "tool"
+                for message in turn_messages
+            ):
+                self._history_tools = _merge_tool_definitions(
+                    self._history_tools or [], effective_loop.tools
+                )
+                self._history_handlers = {
+                    **self._history_handlers,
+                    **tool_loop.handlers,
+                }
+
             if parsed is not None:
                 return parsed
             return cast(str, result.content)
@@ -1004,11 +1108,13 @@ class Conversation:
         # Once tool_calls / role="tool" messages are in the history, some
         # providers reject a request that does not define the tools they refer
         # to. Re-send the definitions, with tool_choice="none" so the model
-        # cannot call a tool nothing here would execute. An explicit tools= or
-        # tool_choice= from the caller wins.
-        if self._history_tools is not None and "tools" not in chat_params:
+        # cannot call a tool nothing here would execute. An explicit non-None
+        # tools= or tool_choice= from the caller wins (a None means "not
+        # provided" throughout this API, so it does not suppress the re-send).
+        if self._history_tools is not None and chat_params.get("tools") is None:
             chat_params["tools"] = self._history_tools
-            chat_params.setdefault("tool_choice", "none")
+            if chat_params.get("tool_choice") is None:
+                chat_params["tool_choice"] = "none"
 
         # Add structured output if schema provided
         if schema:
@@ -1016,18 +1122,24 @@ class Conversation:
 
         response = self.client.chat.create(**chat_params)
 
+        response_content = response.choices[0].message.content
+
+        # Parse before recording anything: last_usage/total_usage are documented
+        # as updated only on a successful turn, and the unparseable assistant
+        # message must not be re-sent by a retry.
+        parsed_response: Optional[Dict[str, Any]] = None
+        if schema:
+            parsed_response = parse_schema_response(response_content, schema)
+
         # Capture this turn's usage and fold it into the conversation running total.
         self.last_usage = response.usage
         self.total_usage = _accumulate_usage(self.total_usage, self.last_usage)
 
-        response_content = response.choices[0].message.content
-
         # Add assistant response to conversation history
         self.messages.append({"role": "assistant", "content": response_content})
 
-        # Parse and validate JSON if schema was provided
-        if schema:
-            return parse_schema_response(response_content, schema)
+        if parsed_response is not None:
+            return parsed_response
 
         return response_content
 
@@ -1043,6 +1155,7 @@ class Conversation:
             self.messages = []
         # No tool messages remain, so nothing obliges later calls to define tools.
         self._history_tools = None
+        self._history_handlers = {}
 
 
 def get_model(model_id: str, client: "OpenRouterClient") -> LLMModel:

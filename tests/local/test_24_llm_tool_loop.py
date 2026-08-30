@@ -20,11 +20,14 @@ from unittest.mock import Mock
 
 import pytest
 
+from openrouter_client.auth import AuthManager
+from openrouter_client.endpoints.chat import ChatEndpoint
 from openrouter_client.exceptions import (
     APIError,
     ToolCallLimitExceeded,
     ToolExecutionError,
 )
+from openrouter_client.http import HTTPManager
 from openrouter_client.models.chat import Usage
 from openrouter_client.models.core import TextContent
 from openrouter_client.models.llm import Conversation, LLMModel, ToolLoop
@@ -275,7 +278,11 @@ class Test_ToolLoop_03_SchemaInteraction:
 
         final_call = client.chat.create.call_args_list[-1]
         assert final_call.kwargs["response_format"]["type"] == "json_schema"
-        assert "tools" not in final_call.kwargs
+        # The definitions still travel (the transcript references them and
+        # Anthropic-family providers reject requests that omit them), but tool
+        # calling is disabled so the model must settle on the answer.
+        assert final_call.kwargs["tools"] == [WEATHER_TOOL]
+        assert final_call.kwargs["tool_choice"] == "none"
 
     def test_tool_call_turn_no_longer_misparsed_as_invalid_json(self):
         # Regression: a null-content tool-call turn used to reach parse_schema_response
@@ -651,9 +658,9 @@ class Test_ToolLoop_07_SecondReviewRegressions:
 
         assert seen["city"] == "Paris"
 
-    def test_tool_choice_is_stripped_from_the_schema_turn(self):
-        # tool_choice is meaningful during tool rounds, but the schema turn
-        # withholds tools on purpose and providers reject the combination.
+    def test_callers_tool_choice_does_not_reach_the_schema_turn(self):
+        # The caller's tool_choice belongs to the tool rounds; the schema turn
+        # forces "none" so the model must settle instead of opening a round.
         client = _client_returning(
             _response(content="ready"),
             _response(content='{"summary": "ok"}'),
@@ -667,8 +674,8 @@ class Test_ToolLoop_07_SecondReviewRegressions:
 
         rounds_call, schema_call = client.chat.create.call_args_list
         assert rounds_call.kwargs["tool_choice"] == "required"
-        assert "tool_choice" not in schema_call.kwargs
-        assert "tools" not in schema_call.kwargs
+        assert schema_call.kwargs["tool_choice"] == "none"
+        assert schema_call.kwargs["tools"] == [WEATHER_TOOL]
 
     def test_structured_assistant_content_is_resendable(self):
         # Message.content may be a list of ContentPart models, which requests'
@@ -885,12 +892,6 @@ class Test_ToolLoop_08_ThirdReviewRegressions:
         # The gap lived in ChatEndpoint.create() itself: data["tools"] = tools
         # went to requests as json= untouched in BOTH validate modes, so the
         # low-level API broke for the tools parameter's own documented type.
-        from unittest.mock import patch
-
-        from openrouter_client.auth import AuthManager
-        from openrouter_client.endpoints.chat import ChatEndpoint
-        from openrouter_client.http import HTTPManager
-
         endpoint = ChatEndpoint(Mock(spec=AuthManager), Mock(spec=HTTPManager))
         endpoint.logger = Mock()
         endpoint._get_headers = Mock(return_value={})
@@ -913,3 +914,190 @@ class Test_ToolLoop_08_ThirdReviewRegressions:
         sent = endpoint.http_manager.post.call_args.kwargs["json"]
         json.dumps(sent)  # raises TypeError before the fix
         assert sent["tools"][0]["function"]["name"] == "my_tool"
+
+
+class Test_ToolLoop_09_FourthReviewRegressions:
+    """Regressions from the fourth review pass over the tool loop."""
+
+    def test_schema_turn_defines_tools_with_choice_none(self):
+        # The schema turn withheld tools while sending a transcript full of
+        # tool_calls / role="tool" messages — the exact shape this library's
+        # own follow-up mechanism says Anthropic-family providers reject.
+        client = _client_returning(
+            _response(tool_calls=[_tool_call()]),
+            _response(content="ready"),
+            _response(content='{"summary": "ok"}'),
+        )
+        LLMModel("test/model", client).prompt(
+            "hi", schema=REPORT_SCHEMA, tool_loop=_weather_loop()
+        )
+
+        schema_call = client.chat.create.call_args_list[-1].kwargs
+        assert schema_call["tools"] == [WEATHER_TOOL]
+        assert schema_call["tool_choice"] == "none"
+
+    def test_null_final_content_returns_empty_string(self):
+        # {content: null, tool_calls: null} (reasoning-only output, content
+        # filter, length stop) escaped as None where the docs promise str.
+        client = _client_returning(_response(content=None))
+        result = LLMModel("test/model", client).prompt(
+            "hi", tool_loop=_weather_loop()
+        )
+
+        assert result == ""
+
+    def test_null_final_content_with_schema_raises_empty_response(self):
+        client = _client_returning(
+            _response(content="ready"),
+            _response(content=None),
+        )
+        with pytest.raises(APIError, match="empty response"):
+            LLMModel("test/model", client).prompt(
+                "hi", schema=REPORT_SCHEMA, tool_loop=_weather_loop()
+            )
+
+    def test_non_loop_schema_failure_records_nothing(self):
+        # The plain schema path recorded usage and kept the junk assistant
+        # message before parse_schema_response raised — the same invariant
+        # violation fixed for the loop path in an earlier round.
+        client = _client_returning(
+            _response(content="not json", usage=_usage(10, 5, 0.5)),
+        )
+        conversation = Conversation("test/model", client)
+
+        with pytest.raises(APIError):
+            conversation.prompt("x", schema=REPORT_SCHEMA)
+
+        assert conversation.total_usage is None
+        assert conversation.last_usage is None
+        # The unparseable assistant message is not kept for a retry to re-send.
+        assert [m["role"] for m in conversation.messages] == ["user"]
+
+    def test_llm_model_non_loop_schema_failure_keeps_prior_usage(self):
+        client = _client_returning(
+            _response(content='{"summary": "ok"}', usage=_usage(10, 5, 0.001)),
+            _response(content="not json", usage=_usage(99, 99, 9.9)),
+        )
+        model = LLMModel("test/model", client)
+        model.prompt("first", schema=REPORT_SCHEMA)
+
+        with pytest.raises(APIError):
+            model.prompt("second", schema=REPORT_SCHEMA)
+
+        # last_usage retains the prior successful call's value, per its docs.
+        assert model.last_usage.cost == pytest.approx(0.001)
+
+    def test_chat_create_serializes_functions_and_tool_choice(self):
+        # create() dumped pydantic models for tools= but passed functions= and
+        # tool_choice= (the signature's own documented types) into json= raw.
+        endpoint = ChatEndpoint(Mock(spec=AuthManager), Mock(spec=HTTPManager))
+        endpoint.logger = Mock()
+        endpoint._get_headers = Mock(return_value={})
+        endpoint._get_endpoint_url = Mock(return_value="chat/completions")
+        post_response = Mock()
+        post_response.json.return_value = {"unvalidatable": True}
+        endpoint.http_manager.post = Mock(return_value=post_response)
+
+        def my_func(city: str) -> str:
+            """Get weather."""
+            return city
+
+        endpoint.create(
+            messages=[{"role": "user", "content": "hi"}],
+            model="test/model",
+            functions=[build_function_definition(my_func)],
+            tool_choice={
+                "type": "function",
+                "function": build_function_definition(my_func),
+            },
+        )
+
+        sent = endpoint.http_manager.post.call_args.kwargs["json"]
+        json.dumps(sent)  # raised TypeError before the fix
+        assert sent["functions"][0]["name"] == "my_func"
+
+    def test_second_tool_loop_merges_definitions_and_handlers(self):
+        # A second ToolLoop overwrote the retained definitions, sending only
+        # the new loop's tools over a transcript that still references the
+        # first loop's tool calls.
+        TIME_TOOL = {
+            "type": "function",
+            "function": {"name": "get_time", "parameters": {"type": "object"}},
+        }
+
+        def get_time() -> str:
+            return "noon"
+
+        time_loop = ToolLoop(tools=[TIME_TOOL], handlers={"get_time": get_time})
+        client = _client_returning(
+            _response(tool_calls=[_tool_call()]),      # turn 1 uses get_weather
+            _response(content="sunny"),
+            _response(tool_calls=[_tool_call(name="get_time", arguments="")]),
+            _response(content="it is noon"),
+        )
+        conversation = Conversation("test/model", client)
+        conversation.prompt("weather?", tool_loop=_weather_loop())
+        result = conversation.prompt("time?", tool_loop=time_loop)
+
+        assert result == "it is noon"
+        # Turn 2's rounds must define BOTH loops' tools — the history still
+        # references get_weather's calls.
+        turn2_tools = client.chat.create.call_args_list[2].kwargs["tools"]
+        names = {t["function"]["name"] for t in turn2_tools}
+        assert names == {"get_weather", "get_time"}
+
+    def test_zero_tool_call_turn_retains_nothing(self):
+        # Retention fired even when the model never called a tool, billing tool
+        # schemas into every later turn of the conversation for no reason.
+        client = _client_returning(
+            _response(content="no tools needed"),
+            _response(content="follow-up answer"),
+        )
+        conversation = Conversation("test/model", client)
+        conversation.prompt("hi", tool_loop=_weather_loop())
+        conversation.prompt("more")
+
+        assert "tools" not in client.chat.create.call_args.kwargs
+
+    def test_retained_tools_are_not_aliased_to_the_callers_loop(self):
+        # _history_tools stored a live reference to ToolLoop.tools, so caller
+        # mutations (loop.tools.clear()) leaked into later requests.
+        loop = _weather_loop()
+        client = _client_returning(
+            _response(tool_calls=[_tool_call()]),
+            _response(content="sunny"),
+            _response(content="later"),
+        )
+        conversation = Conversation("test/model", client)
+        conversation.prompt("weather?", tool_loop=loop)
+        loop.tools.clear()
+        conversation.prompt("and tomorrow?")
+
+        assert client.chat.create.call_args.kwargs["tools"] == [WEATHER_TOOL]
+
+    def test_explicit_tools_none_does_not_suppress_reinjection(self):
+        # tools=None means "not provided" throughout this API; passing it
+        # explicitly used to skip the re-send and hit the undefined-tools 400.
+        client = _client_returning(
+            _response(tool_calls=[_tool_call()]),
+            _response(content="sunny"),
+            _response(content="later"),
+        )
+        conversation = Conversation("test/model", client)
+        conversation.prompt("weather?", tool_loop=_weather_loop())
+        conversation.prompt("more", tools=None)
+
+        assert client.chat.create.call_args.kwargs["tools"] == [WEATHER_TOOL]
+
+    def test_definitions_only_tools_with_choice_none_does_not_warn(self):
+        # The docs sanction explicit tools= with tool_choice="none" (nothing
+        # can be called), but the no-loop warning still fired on it — a hard
+        # failure under warnings-as-errors configs.
+        import warnings as warnings_module
+
+        client = _client_returning(_response(content="ok"))
+        with warnings_module.catch_warnings():
+            warnings_module.simplefilter("error")
+            Conversation("test/model", client).prompt(
+                "hi", tools=[WEATHER_TOOL], tool_choice="none"
+            )

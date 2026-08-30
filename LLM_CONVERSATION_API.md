@@ -211,8 +211,9 @@ except ToolExecutionError:
     answer = conversation.prompt("...", tool_loop=loop)   # clean history
 ```
 
-This differs from the non-tool-loop path, where a failed call leaves the user
-message in place.
+The non-tool-loop path keeps its user message on failure, but likewise records
+no usage and keeps no unparseable assistant message when a schema parse fails —
+`last_usage` / `total_usage` only ever reflect successful turns.
 
 **Usage covers the whole turn.** A single `prompt()` with a tool loop makes
 several API calls; `last_usage` covers all of them, and a conversation's
@@ -236,8 +237,12 @@ The two are kept deliberately apart, in this order:
    JSON grammar — some providers cannot emit a tool call while a strict schema
    is enforced, which would silently suppress tool use.
 2. Once the model stops requesting tools, **one final call** is made with
-   `response_format` attached and `tools` withheld. That response is parsed and
-   validated, and is what `prompt()` returns.
+   `response_format` attached, the tool definitions still included, and
+   `tool_choice="none"`. The definitions must travel — the transcript is full of
+   tool calls and tool results, and Anthropic-family providers reject a request
+   that references tools it does not define — while `"none"` stops the model
+   opening another round. That response is parsed and validated, and is what
+   `prompt()` returns.
 
 That final call appends a short `role="user"` instruction asking for the
 structured answer, so you will see one extra user turn in `conversation.messages`
@@ -276,22 +281,30 @@ request. Using `schema` without `tool_loop` is unchanged — still exactly one c
 round only**: a `"required"` (or named-function) choice forced on every round
 would make the loop's exit condition — a response with no tool calls —
 unsatisfiable, so after round one the provider default (`"auto"`) applies and
-the model can settle. And tools-dependent kwargs (`tool_choice`,
-`parallel_tool_calls`) are dropped from the final schema call, which withholds
-`tools` on purpose — providers reject them with no tools present.
+the model can settle. On the final schema call your `tool_choice` is replaced
+with `"none"` and `parallel_tool_calls` is dropped as moot.
 
-**Follow-up turns keep working.** After a successful tool turn, the conversation
-remembers the loop's tool definitions and re-sends them (with
-`tool_choice="none"`) on later tool-free `prompt()` calls. This is required by
-Anthropic-family providers, which reject a transcript containing tool calls or
-tool results unless the tools are also defined on the request. `clear()` forgets
-the retained definitions along with the history; an explicit `tools=` or
-`tool_choice=` from you wins.
+**Follow-up turns keep working.** After a tool-loop turn that actually recorded
+tool calls in the transcript, the conversation remembers the loop's tool
+definitions (a copy, not your list) and re-sends them with `tool_choice="none"`
+on later tool-free `prompt()` calls. This is required by Anthropic-family
+providers, which reject a transcript containing tool calls or tool results
+unless the tools are also defined on the request. A turn where the model never
+called a tool retains nothing — no schemas are re-billed for it. `clear()`
+forgets the retained definitions along with the history; an explicit non-None
+`tools=` or `tool_choice=` from you wins. Passing your own `tools=` with
+`tool_choice="none"` this way does not trigger the missing-`tool_loop` warning.
+
+**A different `ToolLoop` on a later turn is merged, not swapped.** The history
+still references the earlier loop's tools, so its definitions (and handlers)
+are combined with the new loop's for that turn; a same-named tool takes the
+newer definition.
 
 **Return values are text.** If a provider returns the final answer as a list of
-content parts rather than a string, `prompt()` joins the text parts so the
-documented `str` (or schema `dict`) contract holds; the structured form is kept
-in `conversation.messages`.
+content parts rather than a string, `prompt()` joins the text parts; if it
+returns no content at all (reasoning-only output, content filter), you get `""`
+rather than `None`. The documented `str` (or schema `dict`) contract always
+holds; the raw form is kept in `conversation.messages`.
 
 These live in `openrouter_client.exceptions`. Tool failures are raised rather
 than fed back to the model — if you want the model to see an error and recover,
