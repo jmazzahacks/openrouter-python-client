@@ -6,7 +6,7 @@ import json
 import warnings
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union, cast
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..exceptions import APIError, ToolCallLimitExceeded, ToolExecutionError
 from .attachment import Attachment
@@ -159,7 +159,9 @@ class ToolLoop(BaseModel):
     model — the result is serialized into the ``role="tool"`` message.
 
     Attributes:
-        tools (List[Any]): Tool definitions sent to the API each round.
+        tools (List[Any]): Tool definitions sent to the API each round. Pydantic
+            tool models (what the ``tools`` helpers return) are converted to plain
+            dicts on construction; see the validator below for why.
         handlers (Dict[str, Callable[..., Any]]): Function name -> callable.
         max_rounds (int): Maximum number of tool-executing rounds before
             ToolCallLimitExceeded is raised (default: 8).
@@ -174,6 +176,32 @@ class ToolLoop(BaseModel):
     max_rounds: int = Field(
         8, gt=0, description="Maximum number of tool-executing rounds before giving up"
     )
+
+    @field_validator("tools")
+    @classmethod
+    def serialize_tool_models(cls, tools: List[Any]) -> List[Any]:
+        """
+        Convert Pydantic tool definitions to plain dicts.
+
+        chat.create() only converts tool models when validate_request=True, which
+        is not the default; otherwise it hands them to requests as ``json=``,
+        where a ChatCompletionTool raises "Object of type ChatCompletionTool is
+        not JSON serializable". Normalizing here means the helpers in
+        ``openrouter_client.tools`` and hand-written dicts both just work.
+
+        Args:
+            tools: Tool definitions as supplied by the caller.
+
+        Returns:
+            List[Any]: The definitions with any Pydantic models dumped to dicts.
+        """
+        serialized: List[Any] = []
+        for definition in tools:
+            if isinstance(definition, BaseModel):
+                serialized.append(definition.model_dump(exclude_none=True))
+            else:
+                serialized.append(definition)
+        return serialized
 
 
 class ToolCallRequest(BaseModel):
@@ -358,6 +386,44 @@ def _assistant_message(message: Any) -> Dict[str, Any]:
     return entry
 
 
+# Asks for the structured answer on the tool loop's final call. Also keeps a
+# user turn last, which is what stops Anthropic-family models from reading the
+# request as a prefill of the preceding assistant message.
+SCHEMA_TURN_INSTRUCTION = (
+    "Now give your final answer as a single JSON object conforming to the "
+    "required schema, using what you learned from the tools above."
+)
+
+
+def _combine_usage(usages: List[Usage]) -> Optional[Usage]:
+    """
+    Fold a turn's per-call usage into one figure, preserving a lone call's detail.
+
+    A single call is returned unchanged rather than run through
+    ``_accumulate_usage``, which drops the per-turn breakdowns (cost_details,
+    is_byok, *_tokens_details). Those matter: BYOK callers read real spend from
+    ``cost_details.upstream_inference_cost`` because ``cost`` is 0.0 for them, so
+    aggregating a turn that never needed aggregating would silently zero their
+    accounting. Genuine multi-call turns still lose the breakdowns, which don't
+    sum meaningfully.
+
+    Args:
+        usages: Usage from each API call in the turn, in order.
+
+    Returns:
+        Optional[Usage]: The turn's usage, or None if no call reported any.
+    """
+    if not usages:
+        return None
+    if len(usages) == 1:
+        return usages[0]
+
+    total: Optional[Usage] = None
+    for usage in usages:
+        total = _accumulate_usage(total, usage)
+    return total
+
+
 def _create_completion(
     client: "OpenRouterClient",
     model_id: str,
@@ -368,7 +434,10 @@ def _create_completion(
     Issue one non-streaming chat completion for the tool loop.
 
     chat.create() is typed as possibly returning a stream iterator; the loop
-    never streams, so the result is narrowed here rather than at each use.
+    never streams, so the result is narrowed here rather than at each use. It
+    also falls back to the raw response dict when the response fails to validate,
+    which is checked here so the failure is legible instead of surfacing as an
+    AttributeError several frames deeper, possibly after handlers have run.
 
     Args:
         client: The OpenRouter client to issue the completion with.
@@ -378,10 +447,22 @@ def _create_completion(
 
     Returns:
         ChatCompletionResponse: The parsed completion response.
+
+    Raises:
+        APIError: If the response could not be parsed into a completion.
     """
     response = client.chat.create(
         model=model_id, messages=cast(List[Any], messages), **extra
     )
+
+    if not hasattr(response, "choices"):
+        raise APIError(
+            message="Chat completion response could not be parsed into a "
+            "completion, so the tool loop cannot continue.",
+            status_code=502,
+            details={"response": response},
+        )
+
     return cast(ChatCompletionResponse, response)
 
 
@@ -407,26 +488,33 @@ def _run_tool_rounds(
         chat_kwargs: Extra parameters forwarded to chat.create().
 
     Returns:
-        TurnResult: The model's final content plus usage summed across the rounds.
+        TurnResult: The model's final content plus usage across the rounds.
 
     Raises:
         ToolCallLimitExceeded: If the model still wants tools after max_rounds.
         ToolExecutionError: If a tool call cannot be executed.
     """
-    total_usage: Optional[Usage] = None
+    usages: List[Usage] = []
 
-    for _ in range(tool_loop.max_rounds + 1):
+    for round_index in range(tool_loop.max_rounds + 1):
         response = _create_completion(
             client, model_id, messages, {"tools": tool_loop.tools, **chat_kwargs}
         )
-        total_usage = _accumulate_usage(total_usage, response.usage)
+        if response.usage is not None:
+            usages.append(response.usage)
 
         message = response.choices[0].message
         messages.append(_assistant_message(message))
 
         tool_calls = getattr(message, "tool_calls", None)
         if not tool_calls:
-            return TurnResult(content=message.content, usage=total_usage)
+            return TurnResult(content=message.content, usage=_combine_usage(usages))
+
+        # Check the budget BEFORE executing: handlers have side effects, and
+        # running a batch whose results are about to be discarded would spend
+        # one more round than max_rounds permits.
+        if round_index == tool_loop.max_rounds:
+            break
 
         for raw_call in tool_calls:
             messages.append(
@@ -434,8 +522,9 @@ def _run_tool_rounds(
             )
 
     raise ToolCallLimitExceeded(
-        message=f"Model was still requesting tool calls after {tool_loop.max_rounds} "
-        f"rounds. Raise ToolLoop.max_rounds if this is expected.",
+        message=f"Model was still requesting tool calls after "
+        f"{tool_loop.max_rounds} rounds. Raise ToolLoop.max_rounds if this "
+        f"is expected.",
         max_rounds=tool_loop.max_rounds,
     )
 
@@ -453,6 +542,13 @@ def _run_schema_turn(
     Withholding tools is what makes the model settle on an answer rather than
     opening another round. ``messages`` is appended to in place.
 
+    A short user-role instruction is appended before the call. The tool rounds
+    end on an assistant turn, and a request whose last message is from the
+    assistant reads as a prefill to Anthropic-family models — they continue the
+    previous prose instead of emitting a fresh object, and some providers reject
+    prefill combined with response_format outright. The instruction restores a
+    normal user-turn-last shape.
+
     Args:
         client: The OpenRouter client to issue completions with.
         model_id: Model to call.
@@ -463,6 +559,8 @@ def _run_schema_turn(
     Returns:
         TurnResult: The structured content plus this call's usage.
     """
+    messages.append({"role": "user", "content": SCHEMA_TURN_INSTRUCTION})
+
     response = _create_completion(
         client,
         model_id,
@@ -497,6 +595,11 @@ def _run_tool_loop(
     ``tool_calls``) and every tool result is appended, so the caller's history
     stays complete and reusable.
 
+    On failure the history is rolled back to where this call found it. A partial
+    loop otherwise leaves an assistant turn whose ``tool_calls`` have no matching
+    ``role="tool"`` replies, which most providers reject outright — so a caller
+    that catches ToolExecutionError and retries would be permanently stuck.
+
     Args:
         client: The OpenRouter client to issue completions with.
         model_id: Model to call.
@@ -521,14 +624,22 @@ def _run_tool_loop(
                 f"ToolLoop(tools=...) and structured output via schema=."
             )
 
-    rounds = _run_tool_rounds(client, model_id, messages, tool_loop, chat_kwargs)
-    if schema is None:
-        return rounds
+    history_depth = len(messages)
+    try:
+        rounds = _run_tool_rounds(client, model_id, messages, tool_loop, chat_kwargs)
+        if schema is None:
+            return rounds
 
-    final = _run_schema_turn(client, model_id, messages, schema, chat_kwargs)
+        final = _run_schema_turn(client, model_id, messages, schema, chat_kwargs)
+    except Exception:
+        del messages[history_depth:]
+        raise
+
     return TurnResult(
         content=final.content,
-        usage=_accumulate_usage(rounds.usage, final.usage),
+        usage=_combine_usage(
+            [usage for usage in (rounds.usage, final.usage) if usage is not None]
+        ),
     )
 
 

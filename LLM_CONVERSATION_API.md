@@ -197,9 +197,23 @@ so `conversation.messages` remains a valid, reusable transcript:
 # ['user', 'assistant', 'tool', 'assistant']
 ```
 
+**A failed turn rolls the history back.** If a tool loop raises, `messages` is
+restored to where the turn started, so you never keep an assistant turn whose
+`tool_calls` have no matching results — a shape most providers reject. Catching
+`ToolExecutionError` and retrying on the same conversation is therefore safe.
+
 **Usage covers the whole turn.** A single `prompt()` with a tool loop makes
-several API calls; `last_usage` is the sum across all of them, and a
-conversation's `total_usage` / `total_cost` accumulate normally.
+several API calls; `last_usage` covers all of them, and a conversation's
+`total_usage` / `total_cost` accumulate normally. When a turn made exactly one
+call, that call's `Usage` is passed through untouched, so the per-request
+breakdowns (`cost_details`, `is_byok`) survive — which matters for BYOK spend
+tracking. Genuine multi-call turns report summed tokens and cost only, since the
+breakdowns don't sum meaningfully.
+
+**`max_rounds` bounds tool execution.** With `max_rounds=3` the handlers run at
+most three times; the loop may make one further API call to discover the model
+is *still* asking for tools, but it raises `ToolCallLimitExceeded` without
+executing that batch. Handlers with side effects never run past the budget.
 
 #### Tools together with `schema`
 
@@ -212,6 +226,14 @@ The two are kept deliberately apart, in this order:
 2. Once the model stops requesting tools, **one final call** is made with
    `response_format` attached and `tools` withheld. That response is parsed and
    validated, and is what `prompt()` returns.
+
+That final call appends a short `role="user"` instruction asking for the
+structured answer, so you will see one extra user turn in `conversation.messages`
+for a schema'd tool turn. It is there for a reason: the tool rounds end on an
+assistant message, and a request whose last message is from the assistant reads
+as an *assistant prefill* to Anthropic-family models — they continue the previous
+prose instead of emitting a fresh object, and some providers reject prefill
+combined with `response_format` outright.
 
 ```python
 report = conversation.prompt(
@@ -235,8 +257,9 @@ request. Using `schema` without `tool_loop` is unchanged — still exactly one c
 | Model sends arguments that aren't a JSON object | `ToolExecutionError` |
 | A handler raises | `ToolExecutionError` (original on `.original_error`) |
 | Model still calling tools after `max_rounds` | `ToolCallLimitExceeded` |
+| Response the client could not parse into a completion | `APIError` (502) |
 
-Both live in `openrouter_client.exceptions`. Tool failures are raised rather
+These live in `openrouter_client.exceptions`. Tool failures are raised rather
 than fed back to the model — if you want the model to see an error and recover,
 catch it inside your handler and return the message as the tool's result:
 
