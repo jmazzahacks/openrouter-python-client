@@ -234,24 +234,25 @@ The two are kept deliberately apart, in this order:
 
 1. **Tool rounds** are sent with `tools` attached and **no** `response_format`,
    so tool calling is never subject to a provider constraining output to a JSON
-   grammar. Note that OpenAI supports the combined form (see *Verified
-   behavior* below) — the separation is portability insurance, not a workaround
-   for a limitation observed there.
+   grammar. Both providers tested support the combined form and still emit tool
+   calls (see *Verified behavior* below) — the separation is portability
+   insurance, not a workaround for any limitation actually observed.
 2. Once the model stops requesting tools, **one final call** is made with
    `response_format` attached, the tool definitions still included, and
    `tool_choice="none"`. The definitions travel because the transcript is full
-   of tool calls and tool results, and Anthropic's API requires a request
-   carrying those blocks to define the tools; `"none"` stops the model opening
-   another round. That response is parsed and validated, and is what `prompt()`
-   returns.
+   of tool calls and tool results, and a provider may require a request carrying
+   those blocks to define its tools (neither provider tested did — see *Verified
+   behavior*); `"none"` stops the model opening another round. That response is
+   parsed and validated, and is what `prompt()` returns.
 
 That final call appends a short `role="user"` instruction asking for the
 structured answer, so you will see one extra user turn in `conversation.messages`
-for a schema'd tool turn. It is there for a reason: the tool rounds end on an
-assistant message, and a request whose last message is from the assistant reads
-as an *assistant prefill* to Anthropic-family models — they continue the previous
-prose instead of emitting a fresh object, and some providers reject prefill
-combined with `response_format` outright.
+for a schema'd tool turn. The reasoning was that tool rounds end on an assistant
+message and a request whose last message is from the assistant can read as an
+*assistant prefill*, with the model continuing the prose instead of emitting a
+fresh object. That did not reproduce (see *Verified behavior*); the instruction
+is kept because asking for the structured answer explicitly is useful in its own
+right, but it is not compensating for a measured provider quirk.
 
 ```python
 report = conversation.prompt(
@@ -269,29 +270,43 @@ request. Using `schema` without `tool_loop` is unchanged — still exactly one c
 
 #### Verified behavior
 
-The provider claims above are load-bearing, so they were checked against a live
-API on **2026-08-30** (OpenAI `gpt-4o-mini`, driving this library at
-`base_url="https://api.openai.com/v1"`):
+The provider claims behind this design are load-bearing, so they were checked
+against live APIs on **2026-08-30**: OpenAI `gpt-4o-mini` (driving this library
+at `base_url="https://api.openai.com/v1"`) and `anthropic/claude-haiku-4.5`
+through OpenRouter.
 
-| Claim | Result |
-|---|---|
-| Tool loop executes handlers and returns an answer | works |
-| Schema turn (`tools` + `tool_choice="none"` + `response_format`) is accepted | works |
-| `tool_choice="required"` forces a call even when told not to use tools | **confirmed** — this is why it is relaxed after round one |
-| `tool_choice` with no `tools` | rejected, HTTP 400 |
-| `parallel_tool_calls` with no `tools` | rejected, HTTP 400 |
-| A transcript with tool calls, sent with no `tools` defined | **accepted by OpenAI** |
-| `tools` + strict `json_schema` in one request | **accepted, and tool calls are still emitted** |
+| Claim | OpenAI | Anthropic (via OpenRouter) |
+|---|---|---|
+| Tool loop executes handlers and returns an answer | works | works |
+| Tool loop + `schema` returns a validated dict | works | works |
+| Tool turn then tool-free follow-up | works | works |
+| `tool_choice="required"` forces a call even when told not to use tools | **confirmed** | not retested |
+| `tool_choice` with no `tools` | rejected, HTTP 400 | not retested |
+| `parallel_tool_calls` with no `tools` | rejected, HTTP 400 | not retested |
+| A transcript with tool calls, sent with **no** `tools` defined | accepted | **accepted** |
+| `tools` + strict `json_schema` in one request | accepted, tool calls still emitted | **accepted, tool calls still emitted** |
+| History ending on an assistant message + `response_format` | not retested | **accepted, fresh JSON object returned** |
 
-Two things follow, stated plainly:
+**Three of the provider limitations this design was built around did not
+reproduce on either provider tested.** Stated plainly, because the code comments
+used to assert them as fact:
 
-- **OpenAI does not need the two-phase split.** It happily combines `tools` with
-  a strict schema and still calls tools, so the extra completion buys
-  portability, not correctness, on that provider.
-- **The Anthropic-specific claims here are not verified.** Anthropic's documented
-  requirement that tool-carrying transcripts define their tools is the reason
-  the definitions are re-sent, but no Anthropic-routed model was exercised.
-  Treat those two rows as reasoned-but-untested.
+- **Neither provider suppresses tool calling under a strict schema.** Both
+  accepted `tools` together with a strict `json_schema` and still emitted tool
+  calls. The two-phase split therefore buys portability, not correctness, on
+  both — and costs one extra completion per `prompt()`.
+- **Neither provider rejected a tool-carrying transcript sent without `tools`.**
+  Re-sending the retained definitions on follow-up turns is insurance, not a fix
+  for an observed rejection, and it re-bills the tool schemas each turn.
+- **Assistant-last did not behave as a prefill.** Anthropic via OpenRouter
+  returned a fresh schema-conforming object rather than continuing the prose,
+  and did not reject the combination.
+
+The mechanisms are all validated as *working*; what changed is the
+justification. Everything in the first table's top three rows passed end to end
+on both providers. If you are optimizing cost, the extra schema completion and
+the re-sent definitions are the two things to revisit — with the caveat that
+only one model per family was exercised, both routed through normalizing layers.
 
 #### Errors
 
@@ -314,9 +329,10 @@ with `"none"` and `parallel_tool_calls` is dropped as moot.
 **Follow-up turns keep working.** After a tool-loop turn that actually recorded
 tool calls in the transcript, the conversation remembers the loop's tool
 definitions (a copy, not your list) and re-sends them with `tool_choice="none"`
-on later tool-free `prompt()` calls. Anthropic's API requires a request carrying
-tool-use or tool-result blocks to define the tools; OpenAI accepts it either way
-(see *Verified behavior*), so this is portability insurance. A turn where the model never
+on later tool-free `prompt()` calls, in case a provider requires a request
+carrying tool-use or tool-result blocks to define its tools. Neither provider
+tested requires this (see *Verified behavior*), so it is portability insurance
+that costs the tool schemas in prompt tokens each turn. A turn where the model never
 called a tool retains nothing — no schemas are re-billed for it. `clear()`
 forgets the retained definitions along with the history; an explicit non-None
 `tools=` or `tool_choice=` from you wins. Passing your own `tools=` with
