@@ -272,8 +272,26 @@ request. Using `schema` without `tool_loop` is unchanged — still exactly one c
 | Response the client could not parse, or carrying no choices | `APIError` (502) |
 | `tools`, `response_format`, or `stream=True` passed alongside `tool_loop` | `ValueError` |
 
-`tool_choice` *is* accepted and forwarded to the tool rounds; it is dropped from
-the final schema call, which withholds `tools` on purpose.
+`tool_choice` *is* accepted, with two adjustments. It is honored on the **first
+round only**: a `"required"` (or named-function) choice forced on every round
+would make the loop's exit condition — a response with no tool calls —
+unsatisfiable, so after round one the provider default (`"auto"`) applies and
+the model can settle. And tools-dependent kwargs (`tool_choice`,
+`parallel_tool_calls`) are dropped from the final schema call, which withholds
+`tools` on purpose — providers reject them with no tools present.
+
+**Follow-up turns keep working.** After a successful tool turn, the conversation
+remembers the loop's tool definitions and re-sends them (with
+`tool_choice="none"`) on later tool-free `prompt()` calls. This is required by
+Anthropic-family providers, which reject a transcript containing tool calls or
+tool results unless the tools are also defined on the request. `clear()` forgets
+the retained definitions along with the history; an explicit `tools=` or
+`tool_choice=` from you wins.
+
+**Return values are text.** If a provider returns the final answer as a list of
+content parts rather than a string, `prompt()` joins the text parts so the
+documented `str` (or schema `dict`) contract holds; the structured form is kept
+in `conversation.messages`.
 
 These live in `openrouter_client.exceptions`. Tool failures are raised rather
 than fed back to the model — if you want the model to see an error and recover,

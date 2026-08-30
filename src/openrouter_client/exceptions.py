@@ -405,7 +405,7 @@ class ToolExecutionError(OpenRouterError):
         tool_name: Optional[str] = None,
         tool_call_id: Optional[str] = None,
         original_error: Optional[Exception] = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> None:
         """
         Initialize the exception.
@@ -439,7 +439,7 @@ class ToolCallLimitExceeded(OpenRouterError):
     """
 
     def __init__(
-        self, message: str, max_rounds: Optional[int] = None, **kwargs
+        self, message: str, max_rounds: Optional[int] = None, **kwargs: Any
     ) -> None:
         """
         Initialize the exception.

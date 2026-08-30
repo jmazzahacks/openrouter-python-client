@@ -28,7 +28,10 @@ from openrouter_client.exceptions import (
 from openrouter_client.models.chat import Usage
 from openrouter_client.models.core import TextContent
 from openrouter_client.models.llm import Conversation, LLMModel, ToolLoop
-from openrouter_client.tools import build_chat_completion_tool
+from openrouter_client.tools import (
+    build_chat_completion_tool,
+    build_function_definition,
+)
 
 WEATHER_TOOL = {
     "type": "function",
@@ -711,3 +714,202 @@ class Test_ToolLoop_07_SecondReviewRegressions:
             )
 
         client.chat.create.assert_not_called()
+
+
+class Test_ToolLoop_08_ThirdReviewRegressions:
+    """Regressions from the third review pass over the tool loop."""
+
+    def test_forced_tool_choice_is_relaxed_after_the_first_round(self):
+        # tool_choice="required" forwarded into every round makes the exit
+        # condition (a response with no tool_calls) unsatisfiable: the loop
+        # burned its whole budget and raised ToolCallLimitExceeded every time.
+        client = _client_returning(
+            _response(tool_calls=[_tool_call()]),
+            _response(tool_calls=[_tool_call(call_id="c2")]),
+            _response(content="done"),
+        )
+        result = LLMModel("test/model", client).prompt(
+            "hi", tool_loop=_weather_loop(), tool_choice="required"
+        )
+
+        assert result == "done"
+        choices = [
+            "tool_choice" in call.kwargs for call in client.chat.create.call_args_list
+        ]
+        assert choices == [True, False, False]
+
+    def test_tool_free_follow_up_resends_tool_definitions(self):
+        # A successful tool turn leaves tool_calls / role="tool" messages in
+        # history; a later tool-free prompt() used to send them with no tools
+        # parameter, which Anthropic-family providers reject with a 400.
+        client = _client_returning(
+            _response(tool_calls=[_tool_call()]),
+            _response(content="sunny"),
+            _response(content="cloudy tomorrow"),
+        )
+        conversation = Conversation("test/model", client)
+        conversation.prompt("weather?", tool_loop=_weather_loop())
+        conversation.prompt("and tomorrow?")
+
+        follow_up = client.chat.create.call_args_list[-1].kwargs
+        assert follow_up["tools"] == [WEATHER_TOOL]
+        # Definitions only — nothing here would execute a call the model made.
+        assert follow_up["tool_choice"] == "none"
+
+    def test_clear_forgets_the_retained_tool_definitions(self):
+        client = _client_returning(
+            _response(tool_calls=[_tool_call()]),
+            _response(content="sunny"),
+            _response(content="fresh start"),
+        )
+        conversation = Conversation("test/model", client)
+        conversation.prompt("weather?", tool_loop=_weather_loop())
+        conversation.clear()
+        conversation.prompt("new topic")
+
+        assert "tools" not in client.chat.create.call_args.kwargs
+
+    def test_empty_schema_dict_behaves_as_no_schema(self):
+        # _run_tool_loop tested `schema is None` while the call sites tested
+        # `if schema:`, so schema={} paid for the schema turn and then returned
+        # a raw string anyway.
+        client = _client_returning(_response(content="plain answer"))
+        result = LLMModel("test/model", client).prompt(
+            "hi", schema={}, tool_loop=_weather_loop()
+        )
+
+        assert result == "plain answer"
+        assert client.chat.create.call_count == 1  # no schema turn was paid for
+
+    def test_keyboard_interrupt_in_handler_still_rolls_back(self):
+        # `except Exception` skipped rollback for BaseException, leaving the
+        # provider-rejected unanswered-tool_calls shape in history after Ctrl-C.
+        def handler(city: str) -> str:
+            raise KeyboardInterrupt
+
+        client = Mock()
+        client.chat.create.return_value = _response(tool_calls=[_tool_call()])
+        conversation = Conversation("test/model", client)
+
+        with pytest.raises(KeyboardInterrupt):
+            conversation.prompt("weather?", tool_loop=_weather_loop(handler))
+
+        assert conversation.messages == []
+
+    def test_schema_parse_failure_does_not_record_usage(self):
+        # Usage was recorded before parse_schema_response, so each failed parse
+        # added a rolled-back turn's tokens to total_usage, violating the
+        # documented "updated only on a successful turn" invariant.
+        client = _client_returning(
+            _response(content="ready", usage=_usage(10, 5, 0.001)),
+            _response(content="not json", usage=_usage(10, 5, 0.001)),
+        )
+        conversation = Conversation("test/model", client)
+
+        with pytest.raises(APIError):
+            conversation.prompt("go", schema=REPORT_SCHEMA, tool_loop=_weather_loop())
+
+        assert conversation.last_usage is None
+        assert conversation.total_usage is None
+
+    def test_parallel_tool_calls_is_stripped_from_the_schema_turn(self):
+        client = _client_returning(
+            _response(content="ready"),
+            _response(content='{"summary": "ok"}'),
+        )
+        LLMModel("test/model", client).prompt(
+            "hi",
+            schema=REPORT_SCHEMA,
+            tool_loop=_weather_loop(),
+            parallel_tool_calls=False,
+        )
+
+        rounds_call, schema_call = client.chat.create.call_args_list
+        assert rounds_call.kwargs["parallel_tool_calls"] is False
+        assert "parallel_tool_calls" not in schema_call.kwargs
+
+    def test_list_content_final_answer_is_returned_as_text(self):
+        # The final answer escaped raw when a provider returned content parts,
+        # handing a list of pydantic models to a caller promised a str.
+        parts = [
+            TextContent(type="text", text="hello "),
+            TextContent(type="text", text="world"),
+        ]
+        client = _client_returning(_response(content=parts))
+        result = LLMModel("test/model", client).prompt("hi", tool_loop=_weather_loop())
+
+        assert result == "hello world"
+
+    def test_nested_pydantic_model_in_tool_dict_is_serialized(self):
+        # The validator only dumped top-level models, so a FunctionDefinition
+        # nested in a hand-written dict still broke requests' json encoding.
+        def my_func(city: str) -> str:
+            """Do a thing."""
+            return city
+
+        loop = ToolLoop(
+            tools=[
+                {"type": "function", "function": build_function_definition(my_func)}
+            ],
+            handlers={"my_func": my_func},
+        )
+
+        json.dumps({"tools": loop.tools})  # raises TypeError before the fix
+        assert loop.tools[0]["function"]["name"] == "my_func"
+
+    def test_non_string_tool_call_id_is_coerced(self):
+        # A provider sending id/name as non-strings leaked a pydantic
+        # ValidationError outside the ToolExecutionError contract.
+        seen = {}
+
+        def handler(city: str) -> str:
+            seen["city"] = city
+            return "sunny"
+
+        int_id_call = {
+            "id": 123,
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+        }
+        client = _client_returning(
+            _response(tool_calls=[int_id_call]),
+            _response(content="done"),
+        )
+        conversation = Conversation("test/model", client)
+        conversation.prompt("weather?", tool_loop=_weather_loop(handler))
+
+        assert seen["city"] == "Paris"
+        assert conversation.messages[2]["tool_call_id"] == "123"
+
+    def test_chat_create_serializes_pydantic_tools_at_the_endpoint(self):
+        # The gap lived in ChatEndpoint.create() itself: data["tools"] = tools
+        # went to requests as json= untouched in BOTH validate modes, so the
+        # low-level API broke for the tools parameter's own documented type.
+        from unittest.mock import patch
+
+        from openrouter_client.auth import AuthManager
+        from openrouter_client.endpoints.chat import ChatEndpoint
+        from openrouter_client.http import HTTPManager
+
+        endpoint = ChatEndpoint(Mock(spec=AuthManager), Mock(spec=HTTPManager))
+        endpoint.logger = Mock()
+        endpoint._get_headers = Mock(return_value={})
+        endpoint._get_endpoint_url = Mock(return_value="chat/completions")
+
+        def my_tool(city: str) -> str:
+            """Get weather."""
+            return city
+
+        post_response = Mock()
+        post_response.json.return_value = {"unvalidatable": True}
+        endpoint.http_manager.post = Mock(return_value=post_response)
+
+        endpoint.create(
+            messages=[{"role": "user", "content": "hi"}],
+            model="test/model",
+            tools=[build_chat_completion_tool(my_tool)],
+        )
+
+        sent = endpoint.http_manager.post.call_args.kwargs["json"]
+        json.dumps(sent)  # raises TypeError before the fix
+        assert sent["tools"][0]["function"]["name"] == "my_tool"

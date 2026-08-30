@@ -183,25 +183,21 @@ class ToolLoop(BaseModel):
         """
         Convert Pydantic tool definitions to plain dicts.
 
-        chat.create() only converts tool models when validate_request=True, which
-        is not the default; otherwise it hands them to requests as ``json=``,
-        where a ChatCompletionTool raises "Object of type ChatCompletionTool is
-        not JSON serializable". Normalizing here means the helpers in
-        ``openrouter_client.tools`` and hand-written dicts both just work.
+        Belt alongside chat.create()'s own dumping of tool models: normalizing
+        here as well keeps the loop independent of the endpoint's handling, and
+        the recursion (via ``_plain_content``) also covers a Pydantic model
+        nested inside a hand-written dict, e.g.
+        ``{"type": "function", "function": build_function_definition(f)}``,
+        which a top-level isinstance check would miss and requests' ``json=``
+        cannot encode.
 
         Args:
             tools: Tool definitions as supplied by the caller.
 
         Returns:
-            List[Any]: The definitions with any Pydantic models dumped to dicts.
+            List[Any]: The definitions with all Pydantic models dumped to dicts.
         """
-        serialized: List[Any] = []
-        for definition in tools:
-            if isinstance(definition, BaseModel):
-                serialized.append(definition.model_dump(exclude_none=True))
-            else:
-                serialized.append(definition)
-        return serialized
+        return [_plain_content(definition) for definition in tools]
 
 
 class ToolCallRequest(BaseModel):
@@ -288,7 +284,40 @@ def _read_tool_call(call: Any) -> ToolCallRequest:
     if arguments is not None and not isinstance(arguments, str):
         arguments = json.dumps(arguments, default=str)
 
-    return ToolCallRequest(id=call_id, name=name, arguments=arguments or "")
+    # Same reasoning for a non-string id or name (pydantic v2 does not coerce
+    # int -> str): anything truthy is usable once stringified.
+    return ToolCallRequest(id=str(call_id), name=str(name), arguments=arguments or "")
+
+
+def _content_text(content: Any) -> Optional[str]:
+    """
+    Flatten message content to plain text for a prompt() return value.
+
+    Message.content may be a list of content parts rather than a string; the
+    prompt() contract promises str (or a parsed dict via schema), so the text
+    parts are joined. History keeps the structured form — this is only for what
+    the caller receives and for schema parsing.
+
+    Args:
+        content: The content as it came off the response message.
+
+    Returns:
+        Optional[str]: The content as text; None passes through unchanged.
+    """
+    if content is None or isinstance(content, str):
+        return content
+
+    parts = _plain_content(content)
+    if isinstance(parts, list):
+        texts: List[str] = []
+        for part in parts:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                texts.append(part["text"])
+        if texts:
+            return "".join(texts)
+
+    # No recognizable text parts: encode rather than leak a non-str shape.
+    return json.dumps(parts, default=str)
 
 
 def _serialize_tool_result(result: Any) -> str:
@@ -378,23 +407,25 @@ def _execute_tool_call(
 
 def _plain_content(content: Any) -> Any:
     """
-    Reduce assistant content to something re-sendable as JSON.
+    Recursively reduce a value to something re-sendable as JSON.
 
-    Message.content may be a list of ContentPart models rather than a string.
-    Those go back out on the next round's request, where requests' ``json=``
-    cannot encode a pydantic model — the same failure ToolLoop's validator
-    prevents for tool definitions.
+    Message.content may be a list of ContentPart models rather than a string,
+    and tool definitions may carry pydantic models at any depth. Both go back
+    out on a later request, where requests' ``json=`` cannot encode a pydantic
+    model.
 
     Args:
-        content: The content as it came off the response message.
+        content: The value as it came off a response or from the caller.
 
     Returns:
-        Any: The content with any Pydantic parts dumped to dicts.
+        Any: The value with all Pydantic models dumped to dicts.
     """
     if isinstance(content, BaseModel):
         return content.model_dump(exclude_none=True)
     if isinstance(content, list):
         return [_plain_content(part) for part in content]
+    if isinstance(content, dict):
+        return {key: _plain_content(value) for key, value in content.items()}
     return content
 
 
@@ -520,6 +551,13 @@ def _run_tool_rounds(
     a JSON grammar. ``messages`` is appended to in place with every assistant
     turn (tool_calls included) and every tool result.
 
+    A caller's ``tool_choice`` is honored on the FIRST round only. "required"
+    (or a named function) forced on every round makes the exit condition — a
+    response with no tool calls — unsatisfiable: the loop would execute
+    max_rounds handler batches and then raise, every time. First-round-only
+    gives "call the tool first" its intended meaning while letting the model
+    settle afterwards under the provider default.
+
     Args:
         client: The OpenRouter client to issue completions with.
         model_id: Model to call.
@@ -537,9 +575,10 @@ def _run_tool_rounds(
     usages: List[Usage] = []
 
     for round_index in range(tool_loop.max_rounds + 1):
-        response = _create_completion(
-            client, model_id, messages, {"tools": tool_loop.tools, **chat_kwargs}
-        )
+        round_kwargs = {"tools": tool_loop.tools, **chat_kwargs}
+        if round_index > 0:
+            round_kwargs.pop("tool_choice", None)
+        response = _create_completion(client, model_id, messages, round_kwargs)
         if response.usage is not None:
             usages.append(response.usage)
 
@@ -548,7 +587,9 @@ def _run_tool_rounds(
 
         tool_calls = getattr(message, "tool_calls", None)
         if not tool_calls:
-            return TurnResult(content=message.content, usage=_combine_usage(usages))
+            return TurnResult(
+                content=_content_text(message.content), usage=_combine_usage(usages)
+            )
 
         # Check the budget BEFORE executing: handlers have side effects, and
         # running a batch whose results are about to be discarded would spend
@@ -601,14 +642,17 @@ def _run_schema_turn(
     """
     messages.append({"role": "user", "content": SCHEMA_TURN_INSTRUCTION})
 
-    # tool_choice is meaningful during the tool rounds but not here, where tools
-    # are withheld on purpose: providers reject tool_choice with no tools.
-    extra = {key: value for key, value in chat_kwargs.items() if key != "tool_choice"}
+    # Tools-dependent kwargs are meaningful during the tool rounds but not here,
+    # where tools are withheld on purpose: providers reject them with no tools.
+    tools_only_keys = {"tool_choice", "parallel_tool_calls"}
+    extra = {
+        key: value for key, value in chat_kwargs.items() if key not in tools_only_keys
+    }
     extra["response_format"] = build_json_schema_response_format(schema)
 
     response = _create_completion(client, model_id, messages, extra)
 
-    content = _plain_content(response.choices[0].message.content)
+    content = _content_text(response.choices[0].message.content)
     messages.append({"role": "assistant", "content": content})
 
     return TurnResult(content=content, usage=response.usage)
@@ -676,11 +720,16 @@ def _run_tool_loop(
     history_depth = len(messages)
     try:
         rounds = _run_tool_rounds(client, model_id, messages, tool_loop, chat_kwargs)
-        if schema is None:
+        # Falsy-schema test to match the prompt() call sites' `if schema:`; a
+        # `schema is None` check here would run the schema turn for schema={}
+        # while the caller then returned its result as a raw string.
+        if not schema:
             return rounds
 
         final = _run_schema_turn(client, model_id, messages, schema, chat_kwargs)
-    except Exception:
+    except BaseException:
+        # BaseException so a KeyboardInterrupt mid-loop also rolls back; the
+        # history must never keep an assistant turn with unanswered tool_calls.
         del messages[history_depth:]
         raise
 
@@ -786,9 +835,13 @@ class LLMModel:
             result = _run_tool_loop(
                 self.client, self.model_id, messages, tool_loop, schema, kwargs
             )
-            self.last_usage = result.usage
+            # Parse before recording usage: last_usage is documented as updated
+            # only on success, and a schema-parse failure is a failed prompt().
             if schema:
-                return parse_schema_response(result.content, schema)
+                parsed = parse_schema_response(result.content, schema)
+                self.last_usage = result.usage
+                return parsed
+            self.last_usage = result.usage
             return cast(str, result.content)
 
         # Prepare chat.create() parameters
@@ -850,6 +903,11 @@ class Conversation:
         # safe for concurrent prompt() calls.
         self.last_usage: Optional[Usage] = None
         self.total_usage: Optional[Usage] = None
+        # Tool definitions from the most recent successful tool-loop turn. Once
+        # the history contains tool_calls / role="tool" messages, some providers
+        # (Anthropic-family) reject any request that does not also define the
+        # tools — so later tool-free prompt() calls re-send these.
+        self._history_tools: Optional[List[Any]] = None
 
         # Add system message if provided
         if system:
@@ -918,14 +976,23 @@ class Conversation:
                 result = _run_tool_loop(
                     self.client, self.model_id, self.messages, tool_loop, schema, kwargs
                 )
-                self.last_usage = result.usage
-                self.total_usage = _accumulate_usage(self.total_usage, self.last_usage)
+                # Parse before recording usage: last_usage/total_usage are
+                # documented as updated only on a successful turn, and a
+                # schema-parse failure is a failed turn.
+                parsed: Optional[Dict[str, Any]] = None
                 if schema:
-                    return parse_schema_response(result.content, schema)
-                return cast(str, result.content)
-            except Exception:
+                    parsed = parse_schema_response(result.content, schema)
+            except BaseException:
+                # BaseException so a KeyboardInterrupt also rolls back; the
+                # turn must be undone entirely or kept entirely.
                 del self.messages[history_depth:]
                 raise
+            self.last_usage = result.usage
+            self.total_usage = _accumulate_usage(self.total_usage, self.last_usage)
+            self._history_tools = tool_loop.tools
+            if parsed is not None:
+                return parsed
+            return cast(str, result.content)
 
         # Prepare chat.create() parameters
         chat_params = {
@@ -933,6 +1000,15 @@ class Conversation:
             "messages": self.messages,
             **kwargs,  # Include any additional parameters like temperature
         }
+
+        # Once tool_calls / role="tool" messages are in the history, some
+        # providers reject a request that does not define the tools they refer
+        # to. Re-send the definitions, with tool_choice="none" so the model
+        # cannot call a tool nothing here would execute. An explicit tools= or
+        # tool_choice= from the caller wins.
+        if self._history_tools is not None and "tools" not in chat_params:
+            chat_params["tools"] = self._history_tools
+            chat_params.setdefault("tool_choice", "none")
 
         # Add structured output if schema provided
         if schema:
@@ -965,6 +1041,8 @@ class Conversation:
             self.messages = [self.messages[0]]
         else:
             self.messages = []
+        # No tool messages remain, so nothing obliges later calls to define tools.
+        self._history_tools = None
 
 
 def get_model(model_id: str, client: "OpenRouterClient") -> LLMModel:
