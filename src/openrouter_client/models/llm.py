@@ -3,10 +3,15 @@ Simplified LLM-style API for OpenRouter Client.
 """
 
 import json
-from typing import List, Optional, Dict, Any, Union, TYPE_CHECKING
+import warnings
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union, cast
+
+from pydantic import BaseModel, Field, field_validator
+
+from ..exceptions import APIError, ToolCallLimitExceeded, ToolExecutionError
 from .attachment import Attachment
-from .chat import Usage
-from ..exceptions import APIError
+from .chat import ChatCompletionResponse, Usage
+from .core import to_plain_data
 
 if TYPE_CHECKING:
     from ..client import OpenRouterClient
@@ -100,9 +105,9 @@ def parse_schema_response(content: Any, schema: Dict[str, Any]) -> Dict[str, Any
         if not content.strip():
             raise APIError(
                 message="Model returned empty response when schema was provided. "
-                        "Expected valid JSON matching the schema.",
+                "Expected valid JSON matching the schema.",
                 status_code=422,
-                details={"schema": schema, "response": content}
+                details={"schema": schema, "response": content},
             )
 
         try:
@@ -112,9 +117,13 @@ def parse_schema_response(content: Any, schema: Dict[str, Any]) -> Dict[str, Any
             if not isinstance(parsed, dict):
                 raise APIError(
                     message=f"Model returned JSON of type '{type(parsed).__name__}' "
-                            f"when schema requires an object (dict). Response: {content[:200]}",
+                    f"when schema requires an object (dict). Response: {content[:200]}",
                     status_code=422,
-                    details={"schema": schema, "response": content, "parsed_type": type(parsed).__name__}
+                    details={
+                        "schema": schema,
+                        "response": content,
+                        "parsed_type": type(parsed).__name__,
+                    },
                 )
 
             return parsed
@@ -122,23 +131,671 @@ def parse_schema_response(content: Any, schema: Dict[str, Any]) -> Dict[str, Any
         except json.JSONDecodeError as e:
             raise APIError(
                 message=f"Model returned invalid JSON when schema was provided. "
-                        f"JSON parse error: {str(e)}. Response: {content[:200]}",
+                f"JSON parse error: {str(e)}. Response: {content[:200]}",
                 status_code=422,
-                details={"schema": schema, "response": content, "parse_error": str(e)}
+                details={"schema": schema, "response": content, "parse_error": str(e)},
             )
 
     # Unexpected content type
     raise APIError(
         message=f"Model returned unexpected content type '{type(content).__name__}' "
-                f"when schema was provided. Expected JSON string or dict.",
+        f"when schema was provided. Expected JSON string or dict.",
         status_code=422,
-        details={"schema": schema, "content_type": type(content).__name__}
+        details={"schema": schema, "content_type": type(content).__name__},
     )
+
+
+class ToolLoop(BaseModel):
+    """
+    Tool definitions plus the callables that satisfy them, for an automated tool loop.
+
+    Pass one to ``LLMModel.prompt()`` or ``Conversation.prompt()`` to have the
+    model's tool calls executed and fed back automatically until it produces a
+    final answer. ``tools`` is what gets sent to the API (build these with the
+    ``openrouter_client.tools`` helpers); ``handlers`` maps each tool's function
+    name to the Python callable that runs it.
+
+    A handler is invoked as ``handler(**arguments)`` with the arguments the model
+    emitted, and may return any JSON-serializable value, a string, or a Pydantic
+    model — the result is serialized into the ``role="tool"`` message.
+
+    Attributes:
+        tools (List[Any]): Tool definitions sent to the API each round. Pydantic
+            tool models (what the ``tools`` helpers return) are converted to plain
+            dicts on construction; see the validator below for why.
+        handlers (Dict[str, Callable[..., Any]]): Function name -> callable.
+        max_rounds (int): Maximum number of tool-executing rounds before
+            ToolCallLimitExceeded is raised (default: 8).
+    """
+
+    tools: List[Any] = Field(
+        ..., description="Tool definitions sent to the API each round"
+    )
+    handlers: Dict[str, Callable[..., Any]] = Field(
+        ..., description="Mapping of tool function name to its executing callable"
+    )
+    max_rounds: int = Field(
+        8, gt=0, description="Maximum number of tool-executing rounds before giving up"
+    )
+
+    @field_validator("tools")
+    @classmethod
+    def serialize_tool_models(cls, tools: List[Any]) -> List[Any]:
+        """
+        Convert Pydantic tool definitions to plain dicts.
+
+        Belt alongside chat.create()'s own dumping of tool models: normalizing
+        here as well keeps the loop independent of the endpoint's handling, and
+        the recursion (via ``_plain_content``) also covers a Pydantic model
+        nested inside a hand-written dict, e.g.
+        ``{"type": "function", "function": build_function_definition(f)}``,
+        which a top-level isinstance check would miss and requests' ``json=``
+        cannot encode.
+
+        Args:
+            tools: Tool definitions as supplied by the caller.
+
+        Returns:
+            List[Any]: The definitions with all Pydantic models dumped to dicts.
+        """
+        return [_plain_content(definition) for definition in tools]
+
+
+class ToolCallRequest(BaseModel):
+    """
+    One tool call requested by the model, normalized from the response message.
+
+    Deliberately more permissive than ``ChatCompletionToolCall``: models routinely
+    emit an empty ``arguments`` string for a zero-argument tool, which the stricter
+    model rejects. Argument parsing is handled by the loop so failures surface as
+    ToolExecutionError rather than a validation error.
+
+    Attributes:
+        id (str): ID of the tool call, echoed back on the tool result message.
+        name (str): Name of the function the model wants to call.
+        arguments (str): Raw JSON string of arguments ("" when the model sent none).
+    """
+
+    id: str = Field(
+        ..., description="ID of the tool call, echoed back on the tool result"
+    )
+    name: str = Field(..., description="Name of the function the model wants to call")
+    arguments: str = Field("", description="Raw JSON string of arguments")
+
+
+class TurnResult(BaseModel):
+    """
+    Outcome of one prompt() turn, which may have spanned several API calls.
+
+    Attributes:
+        content (Optional[Any]): Final assistant content for the turn, as the
+            provider returned it — normally a string, but left untyped so an
+            unexpected shape reaches parse_schema_response's clear errors rather
+            than failing validation here.
+        usage (Optional[Usage]): Usage summed across every API call in the turn.
+    """
+
+    content: Optional[Any] = Field(
+        None, description="Final assistant content for the turn"
+    )
+    usage: Optional[Usage] = Field(
+        None, description="Usage summed across the turn's API calls"
+    )
+
+
+def _read_tool_call(call: Any) -> ToolCallRequest:
+    """
+    Normalize a tool call from a response message into a ToolCallRequest.
+
+    Accepts the plain dicts the API returns as well as objects exposing
+    ``id``/``function.name``/``function.arguments``.
+
+    Args:
+        call: A single entry from ``message.tool_calls``.
+
+    Returns:
+        ToolCallRequest: The normalized tool call.
+
+    Raises:
+        ToolExecutionError: If the entry lacks the fields needed to execute it.
+    """
+    if isinstance(call, dict):
+        function = call.get("function") or {}
+        call_id = call.get("id")
+        name = function.get("name") if isinstance(function, dict) else None
+        arguments = function.get("arguments") if isinstance(function, dict) else None
+    else:
+        function = getattr(call, "function", None)
+        call_id = getattr(call, "id", None)
+        name = getattr(function, "name", None)
+        arguments = getattr(function, "arguments", None)
+
+    if not call_id or not name:
+        raise ToolExecutionError(
+            message="Model returned a tool call without an id or function "
+            f"name: {call!r}",
+            tool_name=name,
+            tool_call_id=call_id,
+        )
+
+    # Most providers send arguments as a JSON string, but some (Gemini-family
+    # routes especially) send the object itself. Re-encode so the loop's own
+    # parsing and its ToolExecutionError contract cover both shapes, rather than
+    # leaking a pydantic ValidationError the caller has no reason to expect.
+    if arguments is not None and not isinstance(arguments, str):
+        arguments = json.dumps(arguments, default=str)
+
+    # Same reasoning for a non-string id or name (pydantic v2 does not coerce
+    # int -> str): anything truthy is usable once stringified.
+    return ToolCallRequest(id=str(call_id), name=str(name), arguments=arguments or "")
+
+
+def _content_text(content: Any) -> Optional[str]:
+    """
+    Flatten message content to plain text for a prompt() return value.
+
+    Message.content may be a list of content parts rather than a string; the
+    prompt() contract promises str (or a parsed dict via schema), so the text
+    parts are joined and a null (reasoning-only output, content filter, length
+    stop) becomes "". History keeps the raw form — this is only for what the
+    caller receives and for schema parsing, where "" raises the clear
+    empty-response APIError.
+
+    Args:
+        content: The content as it came off the response message.
+
+    Returns:
+        Optional[str]: The content as text ("" when the model sent none).
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+
+    parts = _plain_content(content)
+    if isinstance(parts, list):
+        texts: List[str] = []
+        for part in parts:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                texts.append(part["text"])
+        if texts:
+            return "".join(texts)
+
+    # No recognizable text parts: encode rather than leak a non-str shape.
+    return json.dumps(parts, default=str)
+
+
+def _serialize_tool_result(result: Any) -> str:
+    """
+    Render a handler's return value as the content of a ``role="tool"`` message.
+
+    Args:
+        result: Whatever the handler returned.
+
+    Returns:
+        str: Strings pass through; Pydantic models and other values are JSON-encoded.
+    """
+    if isinstance(result, str):
+        return result
+    if isinstance(result, BaseModel):
+        return result.model_dump_json()
+    return json.dumps(result, default=str)
+
+
+def _execute_tool_call(
+    call: ToolCallRequest, handlers: Dict[str, Callable[..., Any]]
+) -> Dict[str, Any]:
+    """
+    Run one tool call and build the ``role="tool"`` message carrying its result.
+
+    Args:
+        call: The normalized tool call requested by the model.
+        handlers: Mapping of function name to callable.
+
+    Returns:
+        Dict[str, Any]: A tool-result message ready to append to the history.
+
+    Raises:
+        ToolExecutionError: If no handler is registered for the name, the arguments
+            are not a JSON object, or the handler raises.
+    """
+    handler = handlers.get(call.name)
+    if handler is None:
+        raise ToolExecutionError(
+            message=f"Model called tool '{call.name}', which has no registered "
+            f"handler. Registered handlers: {sorted(handlers)}.",
+            tool_name=call.name,
+            tool_call_id=call.id,
+        )
+
+    raw_arguments = call.arguments.strip()
+    if not raw_arguments:
+        arguments: Dict[str, Any] = {}
+    else:
+        try:
+            arguments = json.loads(raw_arguments)
+        except json.JSONDecodeError as e:
+            raise ToolExecutionError(
+                message=f"Model sent invalid JSON arguments for tool "
+                f"'{call.name}': {str(e)}. Arguments: {call.arguments[:200]}",
+                tool_name=call.name,
+                tool_call_id=call.id,
+                original_error=e,
+            )
+
+    if not isinstance(arguments, dict):
+        raise ToolExecutionError(
+            message=f"Model sent arguments of type "
+            f"'{type(arguments).__name__}' for tool '{call.name}', but tool "
+            f"arguments must be a JSON object.",
+            tool_name=call.name,
+            tool_call_id=call.id,
+        )
+
+    try:
+        result = handler(**arguments)
+    except Exception as e:
+        raise ToolExecutionError(
+            message=f"Handler for tool '{call.name}' raised "
+            f"{type(e).__name__}: {str(e)}",
+            tool_name=call.name,
+            tool_call_id=call.id,
+            original_error=e,
+        ) from e
+
+    return {
+        "role": "tool",
+        "tool_call_id": call.id,
+        "content": _serialize_tool_result(result),
+    }
+
+
+def _plain_content(content: Any) -> Any:
+    """
+    Recursively reduce a value to something re-sendable as JSON.
+
+    Message.content may be a list of ContentPart models rather than a string,
+    and tool definitions may carry pydantic models at any depth. Both go back
+    out on a later request, where requests' ``json=`` cannot encode a pydantic
+    model.
+
+    Args:
+        content: The value as it came off a response or from the caller.
+
+    Returns:
+        Any: The value with all Pydantic models dumped to dicts.
+    """
+    return to_plain_data(content)
+
+
+def _assistant_message(message: Any) -> Dict[str, Any]:
+    """
+    Build the history entry for an assistant turn, preserving any tool calls.
+
+    Args:
+        message: The message object from a chat completion choice.
+
+    Returns:
+        Dict[str, Any]: The assistant message to append to the history.
+    """
+    entry: Dict[str, Any] = {
+        "role": "assistant",
+        "content": _plain_content(message.content),
+    }
+    tool_calls = getattr(message, "tool_calls", None)
+    if tool_calls:
+        entry["tool_calls"] = _plain_content(tool_calls)
+    return entry
+
+
+# Asks for the structured answer on the tool loop's final call. Also keeps a
+# user turn last, which is what stops Anthropic-family models from reading the
+# request as a prefill of the preceding assistant message.
+SCHEMA_TURN_INSTRUCTION = (
+    "Now give your final answer as a single JSON object conforming to the "
+    "required schema, using what you learned from the tools above."
+)
+
+
+def _combine_usage(usages: List[Usage]) -> Optional[Usage]:
+    """
+    Fold a turn's per-call usage into one figure, preserving a lone call's detail.
+
+    A single call is returned unchanged rather than run through
+    ``_accumulate_usage``, which drops the per-turn breakdowns (cost_details,
+    is_byok, *_tokens_details). Those matter: BYOK callers read real spend from
+    ``cost_details.upstream_inference_cost`` because ``cost`` is 0.0 for them, so
+    aggregating a turn that never needed aggregating would silently zero their
+    accounting. Genuine multi-call turns still lose the breakdowns, which don't
+    sum meaningfully.
+
+    Args:
+        usages: Usage from each API call in the turn, in order.
+
+    Returns:
+        Optional[Usage]: The turn's usage, or None if no call reported any.
+    """
+    if not usages:
+        return None
+    if len(usages) == 1:
+        return usages[0]
+
+    total: Optional[Usage] = None
+    for usage in usages:
+        total = _accumulate_usage(total, usage)
+    return total
+
+
+def _create_completion(
+    client: "OpenRouterClient",
+    model_id: str,
+    messages: List[Dict[str, Any]],
+    extra: Dict[str, Any],
+) -> ChatCompletionResponse:
+    """
+    Issue one non-streaming chat completion for the tool loop.
+
+    chat.create() is typed as possibly returning a stream iterator; the loop
+    never streams, so the result is narrowed here rather than at each use. It
+    also falls back to the raw response dict when the response fails to validate,
+    which is checked here so the failure is legible instead of surfacing as an
+    AttributeError several frames deeper, possibly after handlers have run.
+
+    Args:
+        client: The OpenRouter client to issue the completion with.
+        model_id: Model to call.
+        messages: Conversation history to send.
+        extra: Per-call parameters (tools or response_format) plus caller kwargs.
+
+    Returns:
+        ChatCompletionResponse: The parsed completion response.
+
+    Raises:
+        APIError: If the response could not be parsed into a completion.
+    """
+    response = client.chat.create(
+        model=model_id, messages=cast(List[Any], messages), **extra
+    )
+
+    if not hasattr(response, "choices"):
+        raise APIError(
+            message="Chat completion response could not be parsed into a "
+            "completion, so the tool loop cannot continue.",
+            status_code=502,
+            details={"response": response},
+        )
+
+    if not response.choices:
+        raise APIError(
+            message="Chat completion response carried no choices, so the tool "
+            "loop has no message to act on.",
+            status_code=502,
+            details={"response": response},
+        )
+
+    return cast(ChatCompletionResponse, response)
+
+
+def _run_tool_rounds(
+    client: "OpenRouterClient",
+    model_id: str,
+    messages: List[Dict[str, Any]],
+    tool_loop: ToolLoop,
+    chat_kwargs: Dict[str, Any],
+) -> TurnResult:
+    """
+    Call the model with tools attached until it answers without requesting more.
+
+    No ``response_format`` is sent here, so tool calling is never subject to a
+    provider constraining output to a JSON grammar. Checked 2026-08-30 against
+    OpenAI (gpt-4o-mini) and anthropic/claude-haiku-4.5 via OpenRouter: BOTH
+    accept tools together with a strict json_schema and still emit tool calls,
+    so this separation is a precaution rather than a fix for anything observed.
+    It is kept because provider support for the combination cannot be
+    feature-detected, at the cost of one extra completion per schema'd turn.
+    ``messages`` is appended to in place with every assistant turn (tool_calls
+    included) and every tool result.
+
+    A caller's ``tool_choice`` is honored on the FIRST round only. "required"
+    (or a named function) forced on every round makes the exit condition — a
+    response with no tool calls — unsatisfiable: the loop would execute
+    max_rounds handler batches and then raise, every time. First-round-only
+    gives "call the tool first" its intended meaning while letting the model
+    settle afterwards under the provider default.
+
+    Args:
+        client: The OpenRouter client to issue completions with.
+        model_id: Model to call.
+        messages: Conversation history, appended to in place.
+        tool_loop: Tool definitions, handlers, and the round limit.
+        chat_kwargs: Extra parameters forwarded to chat.create().
+
+    Returns:
+        TurnResult: The model's final content plus usage across the rounds.
+
+    Raises:
+        ToolCallLimitExceeded: If the model still wants tools after max_rounds.
+        ToolExecutionError: If a tool call cannot be executed.
+    """
+    usages: List[Usage] = []
+
+    for round_index in range(tool_loop.max_rounds + 1):
+        round_kwargs = {"tools": tool_loop.tools, **chat_kwargs}
+        if round_index > 0:
+            round_kwargs.pop("tool_choice", None)
+        response = _create_completion(client, model_id, messages, round_kwargs)
+        if response.usage is not None:
+            usages.append(response.usage)
+
+        message = response.choices[0].message
+        messages.append(_assistant_message(message))
+
+        tool_calls = getattr(message, "tool_calls", None)
+        if not tool_calls:
+            return TurnResult(
+                content=_content_text(message.content), usage=_combine_usage(usages)
+            )
+
+        # Check the budget BEFORE executing: handlers have side effects, and
+        # running a batch whose results are about to be discarded would spend
+        # one more round than max_rounds permits.
+        if round_index == tool_loop.max_rounds:
+            break
+
+        for raw_call in tool_calls:
+            messages.append(
+                _execute_tool_call(_read_tool_call(raw_call), tool_loop.handlers)
+            )
+
+    raise ToolCallLimitExceeded(
+        message=f"Model was still requesting tool calls after "
+        f"{tool_loop.max_rounds} rounds. Raise ToolLoop.max_rounds if this "
+        f"is expected.",
+        max_rounds=tool_loop.max_rounds,
+    )
+
+
+def _run_schema_turn(
+    client: "OpenRouterClient",
+    model_id: str,
+    messages: List[Dict[str, Any]],
+    schema: Dict[str, Any],
+    tools: List[Any],
+    chat_kwargs: Dict[str, Any],
+) -> TurnResult:
+    """
+    Make the final structured call, with the schema enforced and tools disabled.
+
+    The tool definitions ARE sent — the transcript is full of tool_calls and
+    role="tool" messages, and a provider may require a request carrying those
+    blocks to also define the tools — but with tool_choice="none", so the model
+    cannot open another round and must settle on the answer. Checked 2026-08-30
+    against OpenAI and anthropic/claude-haiku-4.5 via OpenRouter: both accept
+    this exact shape, and both also accept the transcript with no tools at all,
+    so sending them is portability insurance rather than a requirement either
+    one imposes. ``messages`` is appended to in place.
+
+    A short user-role instruction is appended before the call, restoring a
+    user-turn-last shape. THIS IS REQUIRED, not cosmetic: the tool rounds end on
+    an assistant turn, and claude-fable-5, claude-sonnet-5 and claude-opus-5
+    reject an
+    assistant-last conversation with a hard 400 — "This model does not support
+    assistant message prefill. The conversation must end with a user message."
+    (verified via OpenRouter 2026-08-30, with and without response_format).
+    Removing this line breaks schema + tool_loop on those models after every
+    tool round has already been paid for. claude-haiku-4.5 accepts assistant-last,
+    so a Haiku-only check will not catch a regression here.
+
+    Args:
+        client: The OpenRouter client to issue completions with.
+        model_id: Model to call.
+        messages: Conversation history, appended to in place.
+        schema: JSON schema the answer must conform to.
+        tools: The loop's tool definitions, sent so the transcript stays valid.
+        chat_kwargs: Extra parameters forwarded to chat.create().
+
+    Returns:
+        TurnResult: The structured content plus this call's usage.
+    """
+    messages.append({"role": "user", "content": SCHEMA_TURN_INSTRUCTION})
+
+    # The caller's tool_choice belongs to the tool rounds; here it is forced to
+    # "none". parallel_tool_calls is dropped as moot with tool calling disabled.
+    tools_only_keys = {"tool_choice", "parallel_tool_calls"}
+    extra = {
+        key: value for key, value in chat_kwargs.items() if key not in tools_only_keys
+    }
+    extra["tools"] = tools
+    extra["tool_choice"] = "none"
+    extra["response_format"] = build_json_schema_response_format(schema)
+
+    response = _create_completion(client, model_id, messages, extra)
+
+    content = _content_text(response.choices[0].message.content)
+    messages.append({"role": "assistant", "content": content})
+
+    return TurnResult(content=content, usage=response.usage)
+
+
+def _run_tool_loop(
+    client: "OpenRouterClient",
+    model_id: str,
+    messages: List[Dict[str, Any]],
+    tool_loop: ToolLoop,
+    schema: Optional[Dict[str, Any]],
+    chat_kwargs: Dict[str, Any],
+) -> TurnResult:
+    """
+    Drive the model through tool calls until it answers, appending to ``messages``.
+
+    Tool rounds run with ``tools`` attached and no ``response_format``. When a
+    schema is given, the structured answer comes from one additional call made
+    after the model stops requesting tools, with ``response_format`` attached and
+    ``tools`` withheld — the two are kept apart because some providers cannot
+    emit a tool call while a strict output schema is enforced.
+
+    ``messages`` is mutated in place: every assistant turn (including its
+    ``tool_calls``) and every tool result is appended, so the caller's history
+    stays complete and reusable.
+
+    On failure the history is rolled back to where this call found it. A partial
+    loop otherwise leaves an assistant turn whose ``tool_calls`` have no matching
+    ``role="tool"`` replies, which most providers reject outright — so a caller
+    that catches ToolExecutionError and retries would be permanently stuck.
+
+    Args:
+        client: The OpenRouter client to issue completions with.
+        model_id: Model to call.
+        messages: Conversation history, appended to in place.
+        tool_loop: Tool definitions, handlers, and the round limit.
+        schema: Optional JSON schema for the final structured answer.
+        chat_kwargs: Extra parameters forwarded to chat.create().
+
+    Returns:
+        TurnResult: The final content plus usage summed across every call made.
+
+    Raises:
+        ValueError: If chat_kwargs carries 'tools' or 'response_format', which
+            the loop manages itself.
+        ToolCallLimitExceeded: If the model still wants tools after max_rounds.
+        ToolExecutionError: If a tool call cannot be executed.
+    """
+    for managed in ("tools", "response_format"):
+        if managed in chat_kwargs:
+            raise ValueError(
+                f"'{managed}' is managed by the tool loop; pass tools via "
+                f"ToolLoop(tools=...) and structured output via schema=."
+            )
+
+    # Caught here so it fails with a useful message: a stream returns a
+    # generator, which would otherwise surface as an opaque "response could not
+    # be parsed" APIError blaming the provider.
+    if chat_kwargs.get("stream"):
+        raise ValueError(
+            "stream=True is not supported with tool_loop=; the loop needs "
+            "complete responses to detect and execute tool calls."
+        )
+
+    history_depth = len(messages)
+    try:
+        rounds = _run_tool_rounds(client, model_id, messages, tool_loop, chat_kwargs)
+        # Falsy-schema test to match the prompt() call sites' `if schema:`; a
+        # `schema is None` check here would run the schema turn for schema={}
+        # while the caller then returned its result as a raw string.
+        if not schema:
+            return rounds
+
+        final = _run_schema_turn(
+            client, model_id, messages, schema, tool_loop.tools, chat_kwargs
+        )
+    except BaseException:
+        # BaseException so a KeyboardInterrupt mid-loop also rolls back; the
+        # history must never keep an assistant turn with unanswered tool_calls.
+        del messages[history_depth:]
+        raise
+
+    return TurnResult(
+        content=final.content,
+        usage=_combine_usage(
+            [usage for usage in (rounds.usage, final.usage) if usage is not None]
+        ),
+    )
+
+
+def _warn_if_tools_ignored(
+    tool_loop: Optional[ToolLoop], kwargs: Dict[str, Any]
+) -> None:
+    """
+    Warn when tools are passed through kwargs without a ToolLoop to execute them.
+
+    Tools sent this way do reach the API, but nothing runs the resulting tool
+    calls and their content is typically null — the silent no-op this warning
+    exists to make audible. tool_choice="none" is the sanctioned exception:
+    it makes tool calls impossible, so definitions-only requests (the documented
+    override for a tooled conversation's follow-up turns) stay silent.
+
+    Args:
+        tool_loop: The tool loop for this call, if any.
+        kwargs: Extra parameters headed for chat.create().
+    """
+    if (
+        tool_loop is None
+        and kwargs.get("tools")
+        and kwargs.get("tool_choice") != "none"
+    ):
+        warnings.warn(
+            "tools= was passed without tool_loop=, so any tool calls the model makes "
+            "will not be executed and the response content will likely be empty. "
+            "Pass tool_loop=ToolLoop(tools=..., handlers=...) to run them "
+            "automatically.",
+            UserWarning,
+            stacklevel=3,
+        )
 
 
 class LLMModel:
     """Model wrapper with simplified prompt API, inspired by Simon Willison's llm library."""
-    
+
     def __init__(self, model_id: str, client: "OpenRouterClient"):
         self.model_id = model_id
         self.client = client
@@ -154,7 +811,8 @@ class LLMModel:
         system: Optional[str] = None,
         attachments: Optional[List[Attachment]] = None,
         schema: Optional[Dict[str, Any]] = None,
-        **kwargs
+        tool_loop: Optional[ToolLoop] = None,
+        **kwargs,
     ) -> Union[str, Dict[str, Any]]:
         """
         Send a prompt with optional system message, attachments, and structured output.
@@ -164,6 +822,9 @@ class LLMModel:
             system: Optional system prompt to set context/behavior
             attachments: Optional list of file attachments
             schema: Optional JSON schema for structured output
+            tool_loop: Optional ToolLoop whose tools are offered to the model and
+                whose handlers execute any tool calls it makes, automatically, until
+                it produces a final answer
             **kwargs: Additional parameters passed to chat.create()
 
         Returns:
@@ -174,70 +835,140 @@ class LLMModel:
         Raises:
             APIError: If schema is provided but model returns invalid JSON
                      or non-dict response
+            ToolExecutionError: If a tool call cannot be executed
+            ToolCallLimitExceeded: If the model exceeds the loop's max_rounds
         """
+        _warn_if_tools_ignored(tool_loop, kwargs)
+
         # Build messages array
         messages = []
-        
+
         # Add system message if provided
         if system:
             messages.append({"role": "system", "content": system})
-        
+
         # Build user message content
         content = [{"type": "text", "text": text}]
-        
+
         if attachments:
             for attachment in attachments:
                 content.append(attachment.to_content_part())
-        
+
         messages.append({"role": "user", "content": content})
-        
+
+        # Hand off to the tool loop, which manages its own tools/response_format
+        # and may make several API calls before the model settles on an answer.
+        if tool_loop is not None:
+            result = _run_tool_loop(
+                self.client, self.model_id, messages, tool_loop, schema, kwargs
+            )
+            # Parse before recording usage: last_usage is documented as updated
+            # only on success, and a schema-parse failure is a failed prompt().
+            if schema:
+                parsed = parse_schema_response(result.content, schema)
+                self.last_usage = result.usage
+                return parsed
+            self.last_usage = result.usage
+            return cast(str, result.content)
+
         # Prepare chat.create() parameters
         chat_params = {
             "model": self.model_id,
             "messages": messages,
-            **kwargs  # Include any additional parameters like temperature
+            **kwargs,  # Include any additional parameters like temperature
         }
-        
+
         # Add structured output if schema provided
         if schema:
             chat_params["response_format"] = build_json_schema_response_format(schema)
-        
+
         response = self.client.chat.create(**chat_params)
+
+        content = response.choices[0].message.content
+
+        # Parse before recording usage: last_usage is documented as updated only
+        # on success, and a schema-parse failure is a failed prompt().
+        if schema:
+            parsed = parse_schema_response(content, schema)
+            self.last_usage = response.usage
+            return parsed
 
         # Capture this call's token/cost usage (None if the response carried no
         # usage block).
         self.last_usage = response.usage
-
-        content = response.choices[0].message.content
-
-        # Parse and validate JSON if schema was provided
-        if schema:
-            return parse_schema_response(content, schema)
 
         return content
 
     def conversation(self, system: Optional[str] = None) -> "Conversation":
         """
         Create a new conversation context for this model.
-        
+
         Args:
             system: Optional system prompt to set context/behavior for the conversation
-            
+
         Returns:
             Conversation: A conversation object that maintains message history
         """
         return Conversation(self.model_id, self.client, system)
 
 
+def _tool_name(definition: Any) -> Optional[str]:
+    """
+    Extract the function name from a (normalized, plain-dict) tool definition.
+
+    Args:
+        definition: One entry from ToolLoop.tools after validation.
+
+    Returns:
+        Optional[str]: The function name, or None if the shape is unnamed.
+    """
+    if isinstance(definition, dict):
+        function = definition.get("function")
+        if isinstance(function, dict):
+            name = function.get("name")
+            if isinstance(name, str):
+                return name
+    return None
+
+
+def _merge_tool_definitions(retained: List[Any], new: List[Any]) -> List[Any]:
+    """
+    Merge two tool-definition lists, the newer definition winning by name.
+
+    Used when a conversation's history already references one ToolLoop's tools
+    and a later turn brings another: the request must define every tool the
+    transcript mentions, so the sets are combined rather than replaced.
+
+    Args:
+        retained: Definitions the conversation's history already references.
+        new: The current turn's definitions.
+
+    Returns:
+        List[Any]: A new list — named tools deduplicated (new wins), unnamed
+        shapes kept once.
+    """
+    by_name: Dict[str, Any] = {}
+    unnamed: List[Any] = []
+    for definition in retained + new:
+        name = _tool_name(definition)
+        if name is not None:
+            by_name[name] = definition
+        elif definition not in unnamed:
+            unnamed.append(definition)
+    return list(by_name.values()) + unnamed
+
+
 class Conversation:
     """
     Conversation context that maintains message history for multi-turn interactions.
-    
+
     Follows the llm library pattern where you can call conversation.prompt() multiple times
     and it automatically maintains the conversation context.
     """
-    
-    def __init__(self, model_id: str, client: "OpenRouterClient", system: Optional[str] = None):
+
+    def __init__(
+        self, model_id: str, client: "OpenRouterClient", system: Optional[str] = None
+    ):
         self.model_id = model_id
         self.client = client
         self.messages = []
@@ -248,6 +979,21 @@ class Conversation:
         # safe for concurrent prompt() calls.
         self.last_usage: Optional[Usage] = None
         self.total_usage: Optional[Usage] = None
+        # Tool definitions (and their handlers) accumulated from tool-loop turns
+        # whose transcripts actually recorded tool activity. Once the history
+        # contains tool_calls / role="tool" messages, a provider may require the
+        # request to define those tools — so later prompt() calls re-send these,
+        # and a later turn's ToolLoop is merged with them rather than replacing
+        # them (its history still references the earlier loop's tools). Copies,
+        # never the caller's own list, so mutating a ToolLoop after the turn
+        # cannot leak here.
+        #
+        # Checked 2026-08-30: neither OpenAI nor anthropic/claude-haiku-4.5 via
+        # OpenRouter rejects such a transcript without tools, so this is
+        # portability insurance, and it re-bills the tool schemas every turn. A
+        # candidate for removal if that cost matters more than the insurance.
+        self._history_tools: Optional[List[Any]] = None
+        self._history_handlers: Dict[str, Callable[..., Any]] = {}
 
         # Add system message if provided
         if system:
@@ -265,7 +1011,8 @@ class Conversation:
         text: str,
         attachments: Optional[List[Attachment]] = None,
         schema: Optional[Dict[str, Any]] = None,
-        **kwargs
+        tool_loop: Optional[ToolLoop] = None,
+        **kwargs,
     ) -> Union[str, Dict[str, Any]]:
         """
         Send a prompt within this conversation context.
@@ -274,6 +1021,10 @@ class Conversation:
             text: The user prompt text
             attachments: Optional list of file attachments
             schema: Optional JSON schema for structured output
+            tool_loop: Optional ToolLoop whose tools are offered to the model and
+                whose handlers execute any tool calls it makes, automatically, until
+                it produces a final answer. Every assistant turn (with its tool_calls)
+                and every tool result is kept in this conversation's history.
             **kwargs: Additional parameters passed to chat.create()
 
         Returns:
@@ -284,55 +1035,145 @@ class Conversation:
         Raises:
             APIError: If schema is provided but model returns invalid JSON
                      or non-dict response
+            ToolExecutionError: If a tool call cannot be executed
+            ToolCallLimitExceeded: If the model exceeds the loop's max_rounds
         """
+        _warn_if_tools_ignored(tool_loop, kwargs)
+
+        # Depth before this turn's user message, so a failed tool loop can undo
+        # the turn entirely rather than leaving the prompt stranded in history.
+        history_depth = len(self.messages)
+
         # Build user message content
         content = [{"type": "text", "text": text}]
-        
+
         if attachments:
             for attachment in attachments:
                 content.append(attachment.to_content_part())
-        
+
         # Add user message to conversation history
         self.messages.append({"role": "user", "content": content})
-        
+
+        # Hand off to the tool loop, which appends every assistant turn and tool
+        # result to this conversation's history as it goes. The schema parse is
+        # inside the guard because it, too, can fail on a completed turn.
+        if tool_loop is not None:
+            # If earlier turns left tool activity in the history, the request
+            # must still define those tools — merge them (and their handlers)
+            # into this turn's loop rather than letting it replace them.
+            effective_loop = tool_loop
+            if self._history_tools:
+                effective_loop = tool_loop.model_copy(
+                    update={
+                        "tools": _merge_tool_definitions(
+                            self._history_tools, tool_loop.tools
+                        ),
+                        "handlers": {**self._history_handlers, **tool_loop.handlers},
+                    }
+                )
+
+            try:
+                result = _run_tool_loop(
+                    self.client,
+                    self.model_id,
+                    self.messages,
+                    effective_loop,
+                    schema,
+                    kwargs,
+                )
+                # Parse before recording usage: last_usage/total_usage are
+                # documented as updated only on a successful turn, and a
+                # schema-parse failure is a failed turn.
+                parsed: Optional[Dict[str, Any]] = None
+                if schema:
+                    parsed = parse_schema_response(result.content, schema)
+            except BaseException:
+                # BaseException so a KeyboardInterrupt also rolls back; the
+                # turn must be undone entirely or kept entirely.
+                del self.messages[history_depth:]
+                raise
+
+            self.last_usage = result.usage
+            self.total_usage = _accumulate_usage(self.total_usage, self.last_usage)
+
+            # Retain definitions only when this turn actually put tool activity
+            # into the transcript; a turn the model answered without tools
+            # obliges nothing, and re-sending schemas forever costs tokens.
+            turn_messages = self.messages[history_depth:]
+            if any(
+                message.get("tool_calls") or message.get("role") == "tool"
+                for message in turn_messages
+            ):
+                self._history_tools = _merge_tool_definitions(
+                    self._history_tools or [], effective_loop.tools
+                )
+                self._history_handlers = {
+                    **self._history_handlers,
+                    **tool_loop.handlers,
+                }
+
+            if parsed is not None:
+                return parsed
+            return cast(str, result.content)
+
         # Prepare chat.create() parameters
         chat_params = {
             "model": self.model_id,
             "messages": self.messages,
-            **kwargs  # Include any additional parameters like temperature
+            **kwargs,  # Include any additional parameters like temperature
         }
-        
+
+        # Once tool_calls / role="tool" messages are in the history, some
+        # providers reject a request that does not define the tools they refer
+        # to. Re-send the definitions, with tool_choice="none" so the model
+        # cannot call a tool nothing here would execute. An explicit non-None
+        # tools= or tool_choice= from the caller wins (a None means "not
+        # provided" throughout this API, so it does not suppress the re-send).
+        if self._history_tools is not None and chat_params.get("tools") is None:
+            chat_params["tools"] = self._history_tools
+            if chat_params.get("tool_choice") is None:
+                chat_params["tool_choice"] = "none"
+
         # Add structured output if schema provided
         if schema:
             chat_params["response_format"] = build_json_schema_response_format(schema)
-        
+
         response = self.client.chat.create(**chat_params)
+
+        response_content = response.choices[0].message.content
+
+        # Parse before recording anything: last_usage/total_usage are documented
+        # as updated only on a successful turn, and the unparseable assistant
+        # message must not be re-sent by a retry.
+        parsed_response: Optional[Dict[str, Any]] = None
+        if schema:
+            parsed_response = parse_schema_response(response_content, schema)
 
         # Capture this turn's usage and fold it into the conversation running total.
         self.last_usage = response.usage
         self.total_usage = _accumulate_usage(self.total_usage, self.last_usage)
 
-        response_content = response.choices[0].message.content
-
         # Add assistant response to conversation history
         self.messages.append({"role": "assistant", "content": response_content})
 
-        # Parse and validate JSON if schema was provided
-        if schema:
-            return parse_schema_response(response_content, schema)
+        if parsed_response is not None:
+            return parsed_response
 
         return response_content
-    
+
     def get_message_count(self) -> int:
         """Get the number of messages in this conversation."""
         return len(self.messages)
-    
+
     def clear(self) -> None:
         """Clear the conversation history, keeping only the system prompt if any."""
         if self.messages and self.messages[0]["role"] == "system":
             self.messages = [self.messages[0]]
         else:
             self.messages = []
+        # No tool messages remain, so nothing obliges later calls to define tools.
+        self._history_tools = None
+        self._history_handlers = {}
 
 
 def get_model(model_id: str, client: "OpenRouterClient") -> LLMModel:

@@ -158,6 +158,217 @@ Notes:
   and the real per-request spend is in `usage.cost_details.upstream_inference_cost`.
   If you track spend, read `upstream_inference_cost` for BYOK requests.
 
+### Tool Calling (automatic tool loop)
+
+Pass a `ToolLoop` and the model's tool calls are executed for you, round after
+round, until it produces a final answer. `tools` is what gets sent to the API;
+`handlers` maps each tool's function name to the Python callable that runs it.
+
+```python
+from openrouter_client import ToolLoop
+from openrouter_client.tools import build_chat_completion_tool
+
+def get_weather(city: str) -> dict:
+    """Get the current weather for a city."""
+    return {"city": city, "temp_c": 21, "conditions": "sunny"}
+
+loop = ToolLoop(
+    tools=[build_chat_completion_tool(get_weather)],
+    handlers={"get_weather": get_weather},
+    max_rounds=8,   # optional; default 8
+)
+
+conversation = model.conversation()
+answer = conversation.prompt("Should I bring a jacket in Paris?", tool_loop=loop)
+```
+
+Each handler is called as `handler(**arguments)` with the arguments the model
+emitted. It may return a string, any JSON-serializable value, or a Pydantic
+model — the result is serialized into the `role="tool"` message automatically.
+
+`tool_loop` works the same way on a one-off `model.prompt(...)`.
+
+**Conversation history stays complete.** Every assistant turn is recorded *with*
+its `tool_calls`, and every tool result is appended as a `role="tool"` message,
+so `conversation.messages` remains a valid, reusable transcript:
+
+```python
+[m["role"] for m in conversation.messages]
+# ['user', 'assistant', 'tool', 'assistant']
+```
+
+**A failed turn rolls the history back.** If a tool loop raises — including when
+the final structured answer fails to parse — `messages` is restored to exactly
+where it stood before `prompt()` was called, *this turn's own user message
+included*. You never keep an assistant turn whose `tool_calls` have no matching
+results (a shape most providers reject), and retrying on the same conversation
+never stacks duplicate user turns:
+
+```python
+try:
+    answer = conversation.prompt("...", tool_loop=loop)
+except ToolExecutionError:
+    answer = conversation.prompt("...", tool_loop=loop)   # clean history
+```
+
+The non-tool-loop path keeps its user message on failure, but likewise records
+no usage and keeps no unparseable assistant message when a schema parse fails —
+`last_usage` / `total_usage` only ever reflect successful turns.
+
+**Usage covers the whole turn.** A single `prompt()` with a tool loop makes
+several API calls; `last_usage` covers all of them, and a conversation's
+`total_usage` / `total_cost` accumulate normally. When a turn made exactly one
+call, that call's `Usage` is passed through untouched, so the per-request
+breakdowns (`cost_details`, `is_byok`) survive — which matters for BYOK spend
+tracking. Genuine multi-call turns report summed tokens and cost only, since the
+breakdowns don't sum meaningfully.
+
+**`max_rounds` bounds tool execution.** With `max_rounds=3` the handlers run at
+most three times; the loop may make one further API call to discover the model
+is *still* asking for tools, but it raises `ToolCallLimitExceeded` without
+executing that batch. Handlers with side effects never run past the budget.
+
+#### Tools together with `schema`
+
+The two are kept deliberately apart, in this order:
+
+1. **Tool rounds** are sent with `tools` attached and **no** `response_format`,
+   so tool calling is never subject to a provider constraining output to a JSON
+   grammar. Both providers tested support the combined form and still emit tool
+   calls (see *Verified behavior* below) — the separation is portability
+   insurance, not a workaround for any limitation actually observed.
+2. Once the model stops requesting tools, **one final call** is made with
+   `response_format` attached, the tool definitions still included, and
+   `tool_choice="none"`. The definitions travel because the transcript is full
+   of tool calls and tool results, and a provider may require a request carrying
+   those blocks to define its tools (neither provider tested did — see *Verified
+   behavior*); `"none"` stops the model opening another round. That response is
+   parsed and validated, and is what `prompt()` returns.
+
+That final call appends a short `role="user"` instruction asking for the
+structured answer, so you will see one extra user turn in `conversation.messages`
+for a schema'd tool turn. **This is required, not cosmetic.** Tool rounds end on
+an assistant message, and Claude Sonnet 5 and Opus 5 reject an assistant-last
+conversation outright — *"This model does not support assistant message prefill.
+The conversation must end with a user message."* Without the instruction,
+`schema` plus `tool_loop` would fail with a hard 400 on those models after every
+tool round had already been paid for (see *Verified behavior*).
+
+```python
+report = conversation.prompt(
+    "Design a strategy for this pair.",
+    schema=strategy_schema,
+    tool_loop=loop,
+)
+# -> dict, guaranteed, after the model has used tools freely
+```
+
+The cost of this design is one extra completion per `prompt()` compared to
+`schema` alone. In exchange the behavior is deterministic and does not depend on
+whether a given provider supports tool calls and structured output in the same
+request. Using `schema` without `tool_loop` is unchanged — still exactly one call.
+
+#### Verified behavior
+
+The provider claims behind this design are load-bearing, so they were checked
+against live APIs on **2026-08-30**: OpenAI `gpt-4o-mini` (driving this library
+at `base_url="https://api.openai.com/v1"`), and `claude-haiku-4.5`,
+`claude-sonnet-5` and `claude-opus-5` through OpenRouter.
+
+| Claim | OpenAI | Haiku 4.5 | Fable 5 / Sonnet 5 / Opus 5 |
+|---|---|---|---|
+| Tool loop executes handlers and returns an answer | works | works | works |
+| Tool loop + `schema` returns a validated dict | works | works | works |
+| Tool turn then tool-free follow-up | works | works | works |
+| `tool_choice="required"` forces a call even when told not to use tools | **confirmed** | **confirmed** | **confirmed** |
+| `tool_choice` with no `tools` | rejected, 400 | not retested | not retested |
+| `parallel_tool_calls` with no `tools` | rejected, 400 | not retested | not retested |
+| A transcript with tool calls, sent with **no** `tools` defined | accepted | accepted | accepted |
+| `tools` + strict `json_schema` in one request | accepted, tool calls still emitted | same | same |
+| **History ending on an assistant message** | accepted | accepted | **rejected, HTTP 400** |
+
+**The tiers disagree, and only on the last row — which is the one that matters
+most.** Fable 5, Sonnet 5 and Opus 5 all refuse an assistant-last conversation
+outright, with or without `response_format`:
+
+> `invalid_request_error: This model does not support assistant message prefill.
+> The conversation must end with a user message.`
+
+Haiku 4.5, OpenAI and Gemini accept the same request. So the `role="user"`
+instruction the schema turn appends is **load-bearing on the flagship models** —
+without it, `schema` together with `tool_loop` would fail with a hard 400 on
+Fable 5, Sonnet 5 and Opus 5, after every tool round had already been paid for.
+Testing Haiku alone produced the opposite (wrong) conclusion.
+
+The other two suspected limitations did *not* reproduce anywhere, at any tier:
+
+- **No provider suppressed tool calling under a strict schema.** All accepted
+  `tools` together with a strict `json_schema` and still emitted tool calls. The
+  two-phase split buys portability, not correctness, and costs one extra
+  completion per schema'd turn.
+- **No provider rejected a tool-carrying transcript sent without `tools`.**
+  Re-sending the retained definitions is insurance, not a fix for an observed
+  rejection, and it re-bills the tool schemas each turn.
+
+Those two remain candidates for simplification. The prefill instruction is not.
+
+#### Errors
+
+| Situation | Raised |
+|---|---|
+| Model calls a tool with no registered handler | `ToolExecutionError` |
+| Model sends arguments that aren't a JSON object | `ToolExecutionError` |
+| A handler raises | `ToolExecutionError` (original on `.original_error`) |
+| Model still calling tools after `max_rounds` | `ToolCallLimitExceeded` |
+| Response the client could not parse, or carrying no choices | `APIError` (502) |
+| `tools`, `response_format`, or `stream=True` passed alongside `tool_loop` | `ValueError` |
+
+`tool_choice` *is* accepted, with two adjustments. It is honored on the **first
+round only**: a `"required"` (or named-function) choice forced on every round
+would make the loop's exit condition — a response with no tool calls —
+unsatisfiable, so after round one the provider default (`"auto"`) applies and
+the model can settle. On the final schema call your `tool_choice` is replaced
+with `"none"` and `parallel_tool_calls` is dropped as moot.
+
+**Follow-up turns keep working.** After a tool-loop turn that actually recorded
+tool calls in the transcript, the conversation remembers the loop's tool
+definitions (a copy, not your list) and re-sends them with `tool_choice="none"`
+on later tool-free `prompt()` calls, in case a provider requires a request
+carrying tool-use or tool-result blocks to define its tools. Neither provider
+tested requires this (see *Verified behavior*), so it is portability insurance
+that costs the tool schemas in prompt tokens each turn. A turn where the model never
+called a tool retains nothing — no schemas are re-billed for it. `clear()`
+forgets the retained definitions along with the history; an explicit non-None
+`tools=` or `tool_choice=` from you wins. Passing your own `tools=` with
+`tool_choice="none"` this way does not trigger the missing-`tool_loop` warning.
+
+**A different `ToolLoop` on a later turn is merged, not swapped.** The history
+still references the earlier loop's tools, so its definitions (and handlers)
+are combined with the new loop's for that turn; a same-named tool takes the
+newer definition.
+
+**Return values are text.** If a provider returns the final answer as a list of
+content parts rather than a string, `prompt()` joins the text parts; if it
+returns no content at all (reasoning-only output, content filter), you get `""`
+rather than `None`. The documented `str` (or schema `dict`) contract always
+holds; the raw form is kept in `conversation.messages`.
+
+These live in `openrouter_client.exceptions`. Tool failures are raised rather
+than fed back to the model — if you want the model to see an error and recover,
+catch it inside your handler and return the message as the tool's result:
+
+```python
+def get_weather(city: str) -> dict:
+    try:
+        return fetch(city)
+    except UpstreamError as e:
+        return {"error": str(e)}   # the model reads this and can try again
+```
+
+> **Note:** passing `tools=` without `tool_loop=` sends the tools to the API but
+> nothing executes the resulting calls, and the response content is typically
+> empty. That case now emits a `UserWarning`; use `tool_loop` to run them.
+
 ### Conversation Management
 ```python
 conversation = model.conversation()
@@ -203,6 +414,7 @@ print(f"After clear: {conversation.get_message_count()} messages")
 5. **Parameter Passthrough**: All standard OpenRouter/OpenAI parameters can be passed via kwargs
 6. **System Prompt Persistence**: System prompts are maintained even when clearing conversation history
 7. **Cost & Usage Tracking**: After each `prompt()`, token counts and the per-request cost are on `.last_usage`; conversations also expose cumulative `.total_cost` and `.total_usage`
+8. **Tool Calling**: Pass `tool_loop=ToolLoop(tools=..., handlers=...)` to have tool calls executed automatically. With `schema`, tool rounds run unconstrained and the schema is enforced on one final tools-free call
 
 ## Example Use Cases
 
