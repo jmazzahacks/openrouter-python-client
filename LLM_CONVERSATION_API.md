@@ -275,30 +275,30 @@ against live APIs on **2026-08-30**: OpenAI `gpt-4o-mini` (driving this library
 at `base_url="https://api.openai.com/v1"`), and `claude-haiku-4.5`,
 `claude-sonnet-5` and `claude-opus-5` through OpenRouter.
 
-| Claim | OpenAI | Haiku 4.5 | Sonnet 5 / Opus 5 |
+| Claim | OpenAI | Haiku 4.5 | Fable 5 / Sonnet 5 / Opus 5 |
 |---|---|---|---|
 | Tool loop executes handlers and returns an answer | works | works | works |
 | Tool loop + `schema` returns a validated dict | works | works | works |
-| Tool turn then tool-free follow-up | works | works | not retested |
+| Tool turn then tool-free follow-up | works | works | works |
 | `tool_choice="required"` forces a call even when told not to use tools | **confirmed** | **confirmed** | **confirmed** |
 | `tool_choice` with no `tools` | rejected, 400 | not retested | not retested |
 | `parallel_tool_calls` with no `tools` | rejected, 400 | not retested | not retested |
 | A transcript with tool calls, sent with **no** `tools` defined | accepted | accepted | accepted |
 | `tools` + strict `json_schema` in one request | accepted, tool calls still emitted | same | same |
-| **History ending on an assistant message** | not retested | accepted | **rejected, HTTP 400** |
+| **History ending on an assistant message** | accepted | accepted | **rejected, HTTP 400** |
 
 **The tiers disagree, and only on the last row — which is the one that matters
-most.** Sonnet 5 and Opus 5 both refuse an assistant-last conversation outright,
-with or without `response_format`:
+most.** Fable 5, Sonnet 5 and Opus 5 all refuse an assistant-last conversation
+outright, with or without `response_format`:
 
 > `invalid_request_error: This model does not support assistant message prefill.
 > The conversation must end with a user message.`
 
-Haiku 4.5 accepts the same request. So the `role="user"` instruction the schema
-turn appends is **load-bearing on the flagship models** — without it, `schema`
-together with `tool_loop` would fail with a hard 400 on Sonnet and Opus, after
-every tool round had already been paid for. Testing Haiku alone produced the
-opposite (wrong) conclusion.
+Haiku 4.5, OpenAI and Gemini accept the same request. So the `role="user"`
+instruction the schema turn appends is **load-bearing on the flagship models** —
+without it, `schema` together with `tool_loop` would fail with a hard 400 on
+Fable 5, Sonnet 5 and Opus 5, after every tool round had already been paid for.
+Testing Haiku alone produced the opposite (wrong) conclusion.
 
 The other two suspected limitations did *not* reproduce anywhere, at any tier:
 

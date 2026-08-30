@@ -340,10 +340,30 @@ new_key = client.keys.create(
 
 OpenRouter routes to hundreds of models from many providers, and they do **not**
 behave identically. The items below were checked against live APIs on
-**2026-08-30** using `openai/gpt-4o-mini`, `anthropic/claude-haiku-4.5`,
-`anthropic/claude-sonnet-5`, `anthropic/claude-opus-5` and
-`google/gemini-2.5-flash` / `gemini-3-flash-preview`. Anything not verified is
-labelled as such — please don't read an untested row as a guarantee.
+**2026-08-30** using `openai/gpt-4o-mini`, `anthropic/claude-fable-5`,
+`anthropic/claude-sonnet-5`, `anthropic/claude-opus-5`,
+`anthropic/claude-haiku-4.5`, `anthropic/claude-sonnet-4`,
+`anthropic/claude-opus-4.1` and `google/gemini-2.5-flash` /
+`gemini-3-flash-preview`. Anything not verified is labelled as such — please
+don't read an untested row as a guarantee.
+
+### Verified working with the tool loop
+
+Each of these ran the full path end to end: tool loop, tool loop + `schema`
+(returning a validated dict), and a tool turn followed by a tool-free follow-up
+turn.
+
+| Model | Tool loop | Loop + `schema` | Follow-up turn |
+|---|---|---|---|
+| `anthropic/claude-fable-5` | pass | pass | pass |
+| `anthropic/claude-opus-5` | pass | pass | pass |
+| `anthropic/claude-sonnet-5` | pass | pass | pass |
+| `anthropic/claude-haiku-4.5` | pass | pass | pass |
+| `openai/gpt-4o-mini` | pass | pass | pass |
+| `google/gemini-2.5-flash` | pass | not tested | not tested |
+
+Fable 5, Opus 5 and Sonnet 5 are fully supported — including the structured
+output path, which is the one that needs the prefill workaround described below.
 
 ### Not every model supports tools or structured output
 
@@ -359,6 +379,29 @@ caps = {m.id: set(m.supported_parameters or []) for m in models.data}
 "structured_outputs" in caps["anthropic/claude-sonnet-5"]   # True
 ```
 
+Support is **not** implied by a model being recent or capable. Among Anthropic
+models, `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5` and
+`claude-haiku-4.5` advertise both `tools` and `structured_outputs`, while
+`claude-sonnet-4`, `claude-opus-4`, `claude-opus-4.1` and `claude-3-haiku`
+advertise `tools` but **not** `structured_outputs`.
+
+### `schema=` on a model without `structured_outputs` fails confusingly
+
+Because unsupported parameters are dropped rather than rejected, sending
+`schema=` to such a model means `response_format` never reaches it. The model
+replies in prose, and the library — correctly, per its contract — refuses to
+return a non-dict:
+
+```
+APIError 422: Model returned invalid JSON when schema was provided.
+              JSON parse error: Expecting value: line 1 ...
+```
+
+Verified on `claude-sonnet-4` and `claude-opus-4.1`. **The error names the
+symptom, not the cause**: the model did not ignore your instructions, it never
+received the schema. Check `structured_outputs` in `supported_parameters` before
+blaming the prompt.
+
 ### Unsupported parameters are silently ignored, not rejected
 
 OpenRouter drops parameters a model does not support rather than erroring.
@@ -367,9 +410,9 @@ OpenRouter drops parameters a model does not support rather than erroring.
 simply discarded. **If you rely on `temperature=0` for determinism, confirm the
 model actually supports it**; you will get no error telling you it was dropped.
 
-### Claude Sonnet 5 and Opus 5 reject "assistant-last" conversations
+### Claude Fable 5, Sonnet 5 and Opus 5 reject "assistant-last" conversations
 
-Both refuse any request whose message list ends with an `assistant` message:
+All three refuse any request whose message list ends with an `assistant` message:
 
 ```
 invalid_request_error: This model does not support assistant message prefill.
@@ -383,7 +426,8 @@ hand-build message lists, replay a stored transcript, or trim
 **`claude-haiku-4.5`, `google/gemini-2.5-flash` and `openai/gpt-4o-mini` all
 accept the same request**, so this is easy to miss if you test on a cheap model
 and deploy on a flagship one. The library's tool loop handles it internally (it
-appends a short user-role instruction before the final structured call), but
+appends a short user-role instruction before the final structured call), which
+is why `schema=` + `tool_loop=` works on Fable 5, Sonnet 5 and Opus 5 — but
 anything you assemble yourself is your responsibility.
 
 ### `tool_choice="required"` prevents a tool loop from terminating

@@ -637,7 +637,8 @@ def _run_schema_turn(
 
     A short user-role instruction is appended before the call, restoring a
     user-turn-last shape. THIS IS REQUIRED, not cosmetic: the tool rounds end on
-    an assistant turn, and claude-sonnet-5 and claude-opus-5 reject an
+    an assistant turn, and claude-fable-5, claude-sonnet-5 and claude-opus-5
+    reject an
     assistant-last conversation with a hard 400 — "This model does not support
     assistant message prefill. The conversation must end with a user message."
     (verified via OpenRouter 2026-08-30, with and without response_format).

@@ -562,8 +562,9 @@ class Test_ToolLoop_06_ReviewRegressions:
         assert model.last_usage.cost == pytest.approx(0.003)
 
     def test_schema_turn_is_not_sent_as_an_assistant_prefill(self):
-        # Tool rounds end on an assistant turn. claude-sonnet-5 and
-        # claude-opus-5 reject an assistant-last conversation with a hard 400
+        # Tool rounds end on an assistant turn. claude-fable-5,
+        # claude-sonnet-5 and claude-opus-5 all reject an assistant-last
+        # conversation with a hard 400
         # ("This model does not support assistant message prefill. The
         # conversation must end with a user message.") — verified live via
         # OpenRouter 2026-08-30. Deleting the instruction breaks schema +
