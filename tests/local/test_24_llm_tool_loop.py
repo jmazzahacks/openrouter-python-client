@@ -26,6 +26,7 @@ from openrouter_client.exceptions import (
     ToolExecutionError,
 )
 from openrouter_client.models.chat import Usage
+from openrouter_client.models.core import TextContent
 from openrouter_client.models.llm import Conversation, LLMModel, ToolLoop
 from openrouter_client.tools import build_chat_completion_tool
 
@@ -487,8 +488,9 @@ class Test_ToolLoop_06_ReviewRegressions:
         with pytest.raises(ToolExecutionError):
             conversation.prompt("weather?", tool_loop=_weather_loop())
 
-        assert [message["role"] for message in conversation.messages] == ["user"]
-        assert not any("tool_calls" in message for message in conversation.messages)
+        # The whole turn is undone, the prompt's own user message included, so a
+        # retry does not stack duplicate user turns.
+        assert conversation.messages == []
 
     def test_history_is_rolled_back_when_the_round_limit_is_hit(self):
         client = Mock()
@@ -498,7 +500,7 @@ class Test_ToolLoop_06_ReviewRegressions:
         with pytest.raises(ToolCallLimitExceeded):
             conversation.prompt("weather?", tool_loop=_weather_loop(max_rounds=2))
 
-        assert [message["role"] for message in conversation.messages] == ["user"]
+        assert conversation.messages == []
 
     def test_successful_turn_still_keeps_its_history(self):
         # The rollback must not fire on the happy path.
@@ -585,3 +587,127 @@ class Test_ToolLoop_06_ReviewRegressions:
 
         with pytest.raises(APIError, match="could not be parsed"):
             LLMModel("test/model", client).prompt("hi", tool_loop=_weather_loop())
+
+
+class Test_ToolLoop_07_SecondReviewRegressions:
+    """Regressions from the second review pass over the tool loop."""
+
+    def test_retrying_after_a_failure_does_not_stack_user_turns(self):
+        # Rollback used to stop just after the turn's own user message, so each
+        # caught-and-retried failure left another copy of the prompt behind.
+        client = Mock()
+        client.chat.create.return_value = _response(
+            tool_calls=[_tool_call(name="get_stock_price")]
+        )
+        conversation = Conversation("test/model", client)
+
+        for _ in range(3):
+            with pytest.raises(ToolExecutionError):
+                conversation.prompt("weather?", tool_loop=_weather_loop())
+
+        assert conversation.messages == []
+
+    def test_schema_parse_failure_rolls_the_turn_back(self):
+        # parse_schema_response ran outside the guarded region, so an invalid
+        # final answer left the schema instruction and the junk assistant turn
+        # in history — and a retry appended another pair each time.
+        client = _client_returning(
+            _response(tool_calls=[_tool_call()]),
+            _response(content="ready"),
+            _response(content="not json at all"),
+        )
+        conversation = Conversation("test/model", client)
+
+        with pytest.raises(APIError):
+            conversation.prompt("go", schema=REPORT_SCHEMA, tool_loop=_weather_loop())
+
+        assert conversation.messages == []
+
+    def test_object_valued_arguments_are_accepted(self):
+        # Some providers send function.arguments as an object rather than a JSON
+        # string; the strict str field leaked a pydantic ValidationError, which
+        # is outside the documented error contract.
+        seen = {}
+
+        def handler(city: str) -> str:
+            seen["city"] = city
+            return "sunny"
+
+        object_call = {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": {"city": "Paris"}},
+        }
+        client = _client_returning(
+            _response(tool_calls=[object_call]),
+            _response(content="done"),
+        )
+        LLMModel("test/model", client).prompt(
+            "weather?", tool_loop=_weather_loop(handler)
+        )
+
+        assert seen["city"] == "Paris"
+
+    def test_tool_choice_is_stripped_from_the_schema_turn(self):
+        # tool_choice is meaningful during tool rounds, but the schema turn
+        # withholds tools on purpose and providers reject the combination.
+        client = _client_returning(
+            _response(content="ready"),
+            _response(content='{"summary": "ok"}'),
+        )
+        LLMModel("test/model", client).prompt(
+            "hi",
+            schema=REPORT_SCHEMA,
+            tool_loop=_weather_loop(),
+            tool_choice="required",
+        )
+
+        rounds_call, schema_call = client.chat.create.call_args_list
+        assert rounds_call.kwargs["tool_choice"] == "required"
+        assert "tool_choice" not in schema_call.kwargs
+        assert "tools" not in schema_call.kwargs
+
+    def test_structured_assistant_content_is_resendable(self):
+        # Message.content may be a list of ContentPart models, which requests'
+        # json= cannot encode when the history goes back out next round.
+        content_parts = [TextContent(type="text", text="thinking")]
+        sent = []
+
+        def record(**kwargs):
+            json.dumps(kwargs["messages"])  # raises before the fix
+            sent.append(kwargs)
+            return [
+                _response(tool_calls=[_tool_call()], content=content_parts),
+                _response(content="done"),
+            ][len(sent) - 1]
+
+        client = Mock()
+        client.chat.create.side_effect = record
+        conversation = Conversation("test/model", client)
+
+        assert conversation.prompt("hi", tool_loop=_weather_loop()) == "done"
+        assert conversation.messages[1]["content"] == [
+            {"type": "text", "text": "thinking"}
+        ]
+
+    def test_empty_choices_raises_api_error(self):
+        response = Mock()
+        response.usage = None
+        response.choices = []
+        client = Mock()
+        client.chat.create.return_value = response
+
+        with pytest.raises(APIError, match="no choices"):
+            LLMModel("test/model", client).prompt("hi", tool_loop=_weather_loop())
+
+    def test_stream_with_tool_loop_is_rejected_clearly(self):
+        # A stream returns a generator, which would otherwise surface as an
+        # opaque "could not be parsed" APIError blaming the provider.
+        client = Mock()
+
+        with pytest.raises(ValueError, match="stream=True is not supported"):
+            LLMModel("test/model", client).prompt(
+                "hi", tool_loop=_weather_loop(), stream=True
+            )
+
+        client.chat.create.assert_not_called()

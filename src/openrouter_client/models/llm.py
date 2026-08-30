@@ -281,6 +281,13 @@ def _read_tool_call(call: Any) -> ToolCallRequest:
             tool_call_id=call_id,
         )
 
+    # Most providers send arguments as a JSON string, but some (Gemini-family
+    # routes especially) send the object itself. Re-encode so the loop's own
+    # parsing and its ToolExecutionError contract cover both shapes, rather than
+    # leaking a pydantic ValidationError the caller has no reason to expect.
+    if arguments is not None and not isinstance(arguments, str):
+        arguments = json.dumps(arguments, default=str)
+
     return ToolCallRequest(id=call_id, name=name, arguments=arguments or "")
 
 
@@ -369,6 +376,28 @@ def _execute_tool_call(
     }
 
 
+def _plain_content(content: Any) -> Any:
+    """
+    Reduce assistant content to something re-sendable as JSON.
+
+    Message.content may be a list of ContentPart models rather than a string.
+    Those go back out on the next round's request, where requests' ``json=``
+    cannot encode a pydantic model — the same failure ToolLoop's validator
+    prevents for tool definitions.
+
+    Args:
+        content: The content as it came off the response message.
+
+    Returns:
+        Any: The content with any Pydantic parts dumped to dicts.
+    """
+    if isinstance(content, BaseModel):
+        return content.model_dump(exclude_none=True)
+    if isinstance(content, list):
+        return [_plain_content(part) for part in content]
+    return content
+
+
 def _assistant_message(message: Any) -> Dict[str, Any]:
     """
     Build the history entry for an assistant turn, preserving any tool calls.
@@ -379,10 +408,13 @@ def _assistant_message(message: Any) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: The assistant message to append to the history.
     """
-    entry: Dict[str, Any] = {"role": "assistant", "content": message.content}
+    entry: Dict[str, Any] = {
+        "role": "assistant",
+        "content": _plain_content(message.content),
+    }
     tool_calls = getattr(message, "tool_calls", None)
     if tool_calls:
-        entry["tool_calls"] = tool_calls
+        entry["tool_calls"] = _plain_content(tool_calls)
     return entry
 
 
@@ -459,6 +491,14 @@ def _create_completion(
         raise APIError(
             message="Chat completion response could not be parsed into a "
             "completion, so the tool loop cannot continue.",
+            status_code=502,
+            details={"response": response},
+        )
+
+    if not response.choices:
+        raise APIError(
+            message="Chat completion response carried no choices, so the tool "
+            "loop has no message to act on.",
             status_code=502,
             details={"response": response},
         )
@@ -561,14 +601,14 @@ def _run_schema_turn(
     """
     messages.append({"role": "user", "content": SCHEMA_TURN_INSTRUCTION})
 
-    response = _create_completion(
-        client,
-        model_id,
-        messages,
-        {"response_format": build_json_schema_response_format(schema), **chat_kwargs},
-    )
+    # tool_choice is meaningful during the tool rounds but not here, where tools
+    # are withheld on purpose: providers reject tool_choice with no tools.
+    extra = {key: value for key, value in chat_kwargs.items() if key != "tool_choice"}
+    extra["response_format"] = build_json_schema_response_format(schema)
 
-    content = response.choices[0].message.content
+    response = _create_completion(client, model_id, messages, extra)
+
+    content = _plain_content(response.choices[0].message.content)
     messages.append({"role": "assistant", "content": content})
 
     return TurnResult(content=content, usage=response.usage)
@@ -623,6 +663,15 @@ def _run_tool_loop(
                 f"'{managed}' is managed by the tool loop; pass tools via "
                 f"ToolLoop(tools=...) and structured output via schema=."
             )
+
+    # Caught here so it fails with a useful message: a stream returns a
+    # generator, which would otherwise surface as an opaque "response could not
+    # be parsed" APIError blaming the provider.
+    if chat_kwargs.get("stream"):
+        raise ValueError(
+            "stream=True is not supported with tool_loop=; the loop needs "
+            "complete responses to detect and execute tool calls."
+        )
 
     history_depth = len(messages)
     try:
@@ -847,6 +896,10 @@ class Conversation:
         """
         _warn_if_tools_ignored(tool_loop, kwargs)
 
+        # Depth before this turn's user message, so a failed tool loop can undo
+        # the turn entirely rather than leaving the prompt stranded in history.
+        history_depth = len(self.messages)
+
         # Build user message content
         content = [{"type": "text", "text": text}]
 
@@ -858,16 +911,21 @@ class Conversation:
         self.messages.append({"role": "user", "content": content})
 
         # Hand off to the tool loop, which appends every assistant turn and tool
-        # result to this conversation's history as it goes.
+        # result to this conversation's history as it goes. The schema parse is
+        # inside the guard because it, too, can fail on a completed turn.
         if tool_loop is not None:
-            result = _run_tool_loop(
-                self.client, self.model_id, self.messages, tool_loop, schema, kwargs
-            )
-            self.last_usage = result.usage
-            self.total_usage = _accumulate_usage(self.total_usage, self.last_usage)
-            if schema:
-                return parse_schema_response(result.content, schema)
-            return cast(str, result.content)
+            try:
+                result = _run_tool_loop(
+                    self.client, self.model_id, self.messages, tool_loop, schema, kwargs
+                )
+                self.last_usage = result.usage
+                self.total_usage = _accumulate_usage(self.total_usage, self.last_usage)
+                if schema:
+                    return parse_schema_response(result.content, schema)
+                return cast(str, result.content)
+            except Exception:
+                del self.messages[history_depth:]
+                raise
 
         # Prepare chat.create() parameters
         chat_params = {

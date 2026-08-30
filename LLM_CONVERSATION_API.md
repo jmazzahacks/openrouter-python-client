@@ -197,10 +197,22 @@ so `conversation.messages` remains a valid, reusable transcript:
 # ['user', 'assistant', 'tool', 'assistant']
 ```
 
-**A failed turn rolls the history back.** If a tool loop raises, `messages` is
-restored to where the turn started, so you never keep an assistant turn whose
-`tool_calls` have no matching results — a shape most providers reject. Catching
-`ToolExecutionError` and retrying on the same conversation is therefore safe.
+**A failed turn rolls the history back.** If a tool loop raises — including when
+the final structured answer fails to parse — `messages` is restored to exactly
+where it stood before `prompt()` was called, *this turn's own user message
+included*. You never keep an assistant turn whose `tool_calls` have no matching
+results (a shape most providers reject), and retrying on the same conversation
+never stacks duplicate user turns:
+
+```python
+try:
+    answer = conversation.prompt("...", tool_loop=loop)
+except ToolExecutionError:
+    answer = conversation.prompt("...", tool_loop=loop)   # clean history
+```
+
+This differs from the non-tool-loop path, where a failed call leaves the user
+message in place.
 
 **Usage covers the whole turn.** A single `prompt()` with a tool loop makes
 several API calls; `last_usage` covers all of them, and a conversation's
@@ -257,7 +269,11 @@ request. Using `schema` without `tool_loop` is unchanged — still exactly one c
 | Model sends arguments that aren't a JSON object | `ToolExecutionError` |
 | A handler raises | `ToolExecutionError` (original on `.original_error`) |
 | Model still calling tools after `max_rounds` | `ToolCallLimitExceeded` |
-| Response the client could not parse into a completion | `APIError` (502) |
+| Response the client could not parse, or carrying no choices | `APIError` (502) |
+| `tools`, `response_format`, or `stream=True` passed alongside `tool_loop` | `ValueError` |
+
+`tool_choice` *is* accepted and forwarded to the tool rounds; it is dropped from
+the final schema call, which withholds `tools` on purpose.
 
 These live in `openrouter_client.exceptions`. Tool failures are raised rather
 than fed back to the model — if you want the model to see an error and recover,
