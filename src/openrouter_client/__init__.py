@@ -59,6 +59,8 @@ from .types import RequestMethod
 from .models import (
     Attachment,
     LLMModel,
+    Conversation,
+    ToolLoop,
     get_model,
     build_json_schema_response_format,
     parse_schema_response,
@@ -97,6 +99,8 @@ __all__ = [
     # Simple API
     'Attachment',
     'LLMModel',
+    'Conversation',
+    'ToolLoop',
     'get_model',
     'build_json_schema_response_format',
     'parse_schema_response',

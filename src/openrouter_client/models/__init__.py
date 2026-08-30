@@ -103,7 +103,14 @@ from .chat import (
 
 # Simple API models
 from .attachment import Attachment
-from .llm import LLMModel, get_model, build_json_schema_response_format, parse_schema_response
+from .llm import (
+    LLMModel,
+    Conversation,
+    ToolLoop,
+    get_model,
+    build_json_schema_response_format,
+    parse_schema_response,
+)
 
 __all__ = [
     # Core models
@@ -188,6 +195,8 @@ __all__ = [
     # Simple API
     "Attachment",
     "LLMModel",
+    "Conversation",
+    "ToolLoop",
     "get_model",
     "build_json_schema_response_format",
     "parse_schema_response",

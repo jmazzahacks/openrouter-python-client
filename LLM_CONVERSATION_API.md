@@ -158,6 +158,100 @@ Notes:
   and the real per-request spend is in `usage.cost_details.upstream_inference_cost`.
   If you track spend, read `upstream_inference_cost` for BYOK requests.
 
+### Tool Calling (automatic tool loop)
+
+Pass a `ToolLoop` and the model's tool calls are executed for you, round after
+round, until it produces a final answer. `tools` is what gets sent to the API;
+`handlers` maps each tool's function name to the Python callable that runs it.
+
+```python
+from openrouter_client import ToolLoop
+from openrouter_client.tools import build_chat_completion_tool
+
+def get_weather(city: str) -> dict:
+    """Get the current weather for a city."""
+    return {"city": city, "temp_c": 21, "conditions": "sunny"}
+
+loop = ToolLoop(
+    tools=[build_chat_completion_tool(get_weather)],
+    handlers={"get_weather": get_weather},
+    max_rounds=8,   # optional; default 8
+)
+
+conversation = model.conversation()
+answer = conversation.prompt("Should I bring a jacket in Paris?", tool_loop=loop)
+```
+
+Each handler is called as `handler(**arguments)` with the arguments the model
+emitted. It may return a string, any JSON-serializable value, or a Pydantic
+model — the result is serialized into the `role="tool"` message automatically.
+
+`tool_loop` works the same way on a one-off `model.prompt(...)`.
+
+**Conversation history stays complete.** Every assistant turn is recorded *with*
+its `tool_calls`, and every tool result is appended as a `role="tool"` message,
+so `conversation.messages` remains a valid, reusable transcript:
+
+```python
+[m["role"] for m in conversation.messages]
+# ['user', 'assistant', 'tool', 'assistant']
+```
+
+**Usage covers the whole turn.** A single `prompt()` with a tool loop makes
+several API calls; `last_usage` is the sum across all of them, and a
+conversation's `total_usage` / `total_cost` accumulate normally.
+
+#### Tools together with `schema`
+
+The two are kept deliberately apart, in this order:
+
+1. **Tool rounds** are sent with `tools` attached and **no** `response_format`.
+   The model can call tools freely without its output being constrained to a
+   JSON grammar — some providers cannot emit a tool call while a strict schema
+   is enforced, which would silently suppress tool use.
+2. Once the model stops requesting tools, **one final call** is made with
+   `response_format` attached and `tools` withheld. That response is parsed and
+   validated, and is what `prompt()` returns.
+
+```python
+report = conversation.prompt(
+    "Design a strategy for this pair.",
+    schema=strategy_schema,
+    tool_loop=loop,
+)
+# -> dict, guaranteed, after the model has used tools freely
+```
+
+The cost of this design is one extra completion per `prompt()` compared to
+`schema` alone. In exchange the behavior is deterministic and does not depend on
+whether a given provider supports tool calls and structured output in the same
+request. Using `schema` without `tool_loop` is unchanged — still exactly one call.
+
+#### Errors
+
+| Situation | Raised |
+|---|---|
+| Model calls a tool with no registered handler | `ToolExecutionError` |
+| Model sends arguments that aren't a JSON object | `ToolExecutionError` |
+| A handler raises | `ToolExecutionError` (original on `.original_error`) |
+| Model still calling tools after `max_rounds` | `ToolCallLimitExceeded` |
+
+Both live in `openrouter_client.exceptions`. Tool failures are raised rather
+than fed back to the model — if you want the model to see an error and recover,
+catch it inside your handler and return the message as the tool's result:
+
+```python
+def get_weather(city: str) -> dict:
+    try:
+        return fetch(city)
+    except UpstreamError as e:
+        return {"error": str(e)}   # the model reads this and can try again
+```
+
+> **Note:** passing `tools=` without `tool_loop=` sends the tools to the API but
+> nothing executes the resulting calls, and the response content is typically
+> empty. That case now emits a `UserWarning`; use `tool_loop` to run them.
+
 ### Conversation Management
 ```python
 conversation = model.conversation()
@@ -203,6 +297,7 @@ print(f"After clear: {conversation.get_message_count()} messages")
 5. **Parameter Passthrough**: All standard OpenRouter/OpenAI parameters can be passed via kwargs
 6. **System Prompt Persistence**: System prompts are maintained even when clearing conversation history
 7. **Cost & Usage Tracking**: After each `prompt()`, token counts and the per-request cost are on `.last_usage`; conversations also expose cumulative `.total_cost` and `.total_usage`
+8. **Tool Calling**: Pass `tool_loop=ToolLoop(tools=..., handlers=...)` to have tool calls executed automatically. With `schema`, tool rounds run unconstrained and the schema is enforced on one final tools-free call
 
 ## Example Use Cases
 
