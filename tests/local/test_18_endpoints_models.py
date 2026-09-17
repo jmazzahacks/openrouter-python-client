@@ -566,3 +566,16 @@ class Test_ModelsEndpoint_ListEndpoints_04_ErrorHandlingBehaviors:
                 models_endpoint_base.list_endpoints("author", "slug")
             
             assert "Validation failed" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("target", [{"slug": "vendor/concrete", "name": "Concrete"}, {}])
+def test_list_details_preserves_alias_target(models_endpoint_base, mock_response, target):
+    mock_response.json.return_value = {"data": [{
+        "id": "vendor/alias", "name": "Alias", "created": 1,
+        "context_length": 4096, "pricing": {"prompt": "0", "completion": "0"},
+        "alias_target": target,
+    }]}
+    models_endpoint_base.http_manager.get.return_value = mock_response
+    result = models_endpoint_base.list(details=True)
+    assert result.data[0].alias_target == target
+    models_endpoint_base.http_manager.get.assert_called_once()

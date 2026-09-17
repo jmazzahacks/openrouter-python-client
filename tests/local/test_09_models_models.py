@@ -788,3 +788,23 @@ class Test_ModelEndpointsResponse_03_BoundaryBehaviors:
         assert model.object == "list"
         assert isinstance(model.data, dict)
         assert len(model.data) == 0
+
+
+@pytest.mark.parametrize("target", [
+    {"name": "Concrete model", "slug": "vendor/concrete-v2"},
+    {},
+    {"slug": "vendor/concrete-v2", "future_field": True},
+])
+def test_catalog_preserves_alias_target(valid_model_data_api_data, target):
+    payload = {**valid_model_data_api_data, "alias_target": target}
+    response = ModelsResponse.model_validate({"data": [payload]})
+    assert response.data[0].alias_target == target
+    assert response.model_dump()["data"][0]["alias_target"] == target
+
+
+@pytest.mark.parametrize("extra", [{}, {"alias_target": None}])
+def test_catalog_without_alias_target(valid_model_data_api_data, extra):
+    response = ModelsResponse.model_validate(
+        {"data": [{**valid_model_data_api_data, **extra}]}
+    )
+    assert response.data[0].alias_target is None

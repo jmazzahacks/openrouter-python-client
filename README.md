@@ -143,6 +143,16 @@ cannot be safely re-sent.
 
 ## Examples
 
+### Catalog alias metadata
+
+`client.models.list(details=True)` preserves each model's optional
+`alias_target` object, including its `slug` and `name` when supplied. It is
+`None` when absent or null. Consumers can inspect it before creating a
+conversation; it describes a catalog alias, not a completion's served model.
+`model.architecture.tokenizer` also exposes the catalog's `Router` marker.
+The library preserves these fields without imposing a model-selection policy.
+
+
 ### Streaming Responses
 
 ```python

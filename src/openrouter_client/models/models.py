@@ -224,6 +224,7 @@ class ModelData(BaseModel):
         top_provider (Optional[TopProvider]): Top provider information.
         pricing (ModelPricing): Pricing information for the model.
         canonical_slug (Optional[str]): Canonical slug for the model.
+        alias_target (Optional[Dict[str, Any]]): Target metadata for a catalog alias.
         context_length (int): Maximum context length in tokens.
         hugging_face_id (Optional[str]): Hugging Face model ID.
         per_request_limits (Dict[str, Any]): Per-request limits.
@@ -239,6 +240,11 @@ class ModelData(BaseModel):
     top_provider: Optional[TopProvider] = Field(None, description="Top provider information")
     pricing: ModelPricing = Field(..., description="Pricing information for the model")
     canonical_slug: Optional[str] = Field(None, description="Canonical slug for the model")
+    # Present for dynamic aliases in the model catalog. Preserve the object
+    # even when partial/empty: its presence is meaningful to model selectors.
+    alias_target: Optional[Dict[str, Any]] = Field(
+        None, description="Catalog alias target metadata; None for entries without a target"
+    )
     context_length: int = Field(..., description="Maximum context length in tokens")
     hugging_face_id: Optional[str] = Field(None, description="Hugging Face model ID")
     per_request_limits: Optional[Dict[str, Any]] = Field(None, description="Per-request limits")
