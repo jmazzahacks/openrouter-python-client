@@ -49,6 +49,21 @@ from .completions import (
     LogProbs,
 )
 
+from .images import (
+    CapabilityDescriptor,
+    ImageArchitecture,
+    ImageData,
+    ImageEndpointPricing,
+    ImageGenerationRequest,
+    ImageGenerationResponse,
+    ImageModel,
+    ImageModelEndpoint,
+    ImageModelEndpointsResponse,
+    ImageModelsResponse,
+    ImageReference,
+    ImageReferenceUrl,
+    ImageUsage,
+)
 from .models import (
     Model,
     ModelList,
@@ -113,6 +128,20 @@ from .llm import (
 )
 
 __all__ = [
+    'CapabilityDescriptor',
+    'ImageArchitecture',
+    'ImageData',
+    'ImageEndpointPricing',
+    'ImageGenerationRequest',
+    'ImageGenerationResponse',
+    'ImageModel',
+    'ImageModelEndpoint',
+    'ImageModelEndpointsResponse',
+    'ImageModelsResponse',
+    'ImageReference',
+    'ImageReferenceUrl',
+    'ImageUsage',
+
     # Core models
     "FunctionDefinition",
     "ToolDefinition",

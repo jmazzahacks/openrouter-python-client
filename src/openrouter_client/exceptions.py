@@ -451,3 +451,44 @@ class ToolCallLimitExceeded(OpenRouterError):
         """
         self.max_rounds = max_rounds
         super().__init__(message, max_rounds=max_rounds, **kwargs)
+
+
+class ImageGenerationError(APIError):
+    """A named failure of one image generation. The batch may continue.
+
+    THE TAXONOMY, AND WHY IT IS NOT JUST "IT FAILED"
+    ------------------------------------------------
+    A caller generating many images needs three different remedies, and one shared
+    exception would give it none of them:
+
+    * ``ImageGenerationError``  -- this image failed for a named reason (a rate
+      limit, a provider hiccup). Try the next one.
+    * ``ImageGenerationFatal``  -- every remaining request would fail identically
+      (no key, rejected key, no credits, unknown or unusable model). Stop, rather
+      than paying for the same refusal once per image.
+    * ``ImageRefused``          -- the provider answered SUCCESSFULLY and chose not
+      to produce an image. Not a malfunction and not fatal: the next request may
+      well succeed.
+
+    "The provider refused you" and "the provider is broken" need opposite
+    responses, so they are never flattened into one sentence.
+    """
+
+
+class ImageGenerationFatal(ImageGenerationError):
+    """A failure that would repeat identically on every remaining request.
+
+    Raised for a missing or rejected key, exhausted credits, and an unknown or
+    unusable model. Callers stop the run rather than re-ask a question already
+    refused.
+    """
+
+
+class ImageRefused(ImageGenerationError):
+    """The provider answered normally and declined to produce this image.
+
+    MEASURED 2026-09-18: a moderation block arrives as **HTTP 400** carrying a
+    message naming moderation -- not, as one might assume, as a 200 with an empty
+    ``data`` list. Both shapes are mapped here, because a refusal filed as a
+    transport error is a refusal the caller cannot see or count.
+    """

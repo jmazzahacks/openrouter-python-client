@@ -53,6 +53,7 @@ from .auth import AuthManager, SecretsManager
 from .http import HTTPManager
 from .endpoints.completions import CompletionsEndpoint
 from .endpoints.chat import ChatEndpoint
+from .endpoints.images import ImagesEndpoint
 from .endpoints.models import ModelsEndpoint
 from .endpoints.generations import GenerationsEndpoint
 from .endpoints.credits import CreditsEndpoint
@@ -70,6 +71,7 @@ class OpenRouterClient:
         completions (CompletionsEndpoint): Text completions endpoint handler.
         chat (ChatEndpoint): Chat completions endpoint handler.
         models (ModelsEndpoint): Model information endpoint handler.
+        images (ImagesEndpoint): Image generation endpoint handler.
         generations (GenerationsEndpoint): Generation statistics endpoint handler.
         credits (CreditsEndpoint): Credits management endpoint handler.
         keys (KeysEndpoint): API key management endpoint handler.
@@ -184,6 +186,12 @@ class OpenRouterClient:
             http_manager=self.http_manager
         )
         
+        # Create ImagesEndpoint with auth_manager and http_manager
+        self.images = ImagesEndpoint(
+            auth_manager=self.auth_manager,
+            http_manager=self.http_manager
+        )
+
         # Create GenerationsEndpoint with auth_manager and http_manager
         self.generations = GenerationsEndpoint(
             auth_manager=self.auth_manager,
@@ -527,7 +535,7 @@ class OpenRouterClient:
                 self.logger.error(f"Error closing HTTP manager: {str(e)}")
         
         # Clear all endpoint instances to release their resources
-        for endpoint_name in ['completions', 'chat', 'models', 'generations', 
+        for endpoint_name in ['completions', 'chat', 'models', 'images', 'generations',
                              'credits', 'keys']:
             if hasattr(self, endpoint_name):
                 try:

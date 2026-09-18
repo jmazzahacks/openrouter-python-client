@@ -12,6 +12,9 @@ api_reference.md
 api_streaming.md
 CLAUDE.md
 .mcp.json
+
+# Generated agent config; carries the same credential as .mcp.json
+.codex/
 file_skeletons.md
 layout.md
 openrouter_api_spec.md

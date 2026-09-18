@@ -86,6 +86,9 @@ from .tools import (
     create_parameter_schema_from_value
 )
 
+from .exceptions import ImageGenerationError, ImageGenerationFatal, ImageRefused
+from .models.images import ImageGenerationRequest, ImageGenerationResponse, ImageReference
+
 __all__ = [
     # Core client and utilities
     'OpenRouterClient',
@@ -108,6 +111,14 @@ __all__ = [
     'CostDetails',
     'PromptTokensDetails',
     'CompletionTokensDetails',
+
+    # Image generation
+    'ImageGenerationRequest',
+    'ImageGenerationResponse',
+    'ImageReference',
+    'ImageGenerationError',
+    'ImageGenerationFatal',
+    'ImageRefused',
 
     # Tool utilities
     'tool',
