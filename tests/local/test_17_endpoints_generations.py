@@ -14,7 +14,7 @@ class TestGenerationsEndpointInit01NominalBehaviors:
     def test_successful_initialization_with_valid_managers(self):
         """Test successful initialization with valid AuthManager and HTTPManager instances"""
         # Arrange
-        auth_manager= AuthManager()
+        auth_manager= AuthManager(api_key="test-key")
         http_manager = HTTPManager(base_url="https://invalid.thisurldoesnotexist.com")
         
         # Act
@@ -51,7 +51,7 @@ class TestGenerationsEndpointInit04ErrorHandlingBehaviors:
     def test_logger_creation_handles_exceptions_gracefully(self):
         """Test logger creation handles exceptions gracefully"""
         # Arrange
-        auth_manager = AuthManager()
+        auth_manager = AuthManager(api_key="test-key")
         http_manager = HTTPManager(base_url="https://api.openrouter.ai/v1")
         
         # Act - Should succeed even if logger creation fails

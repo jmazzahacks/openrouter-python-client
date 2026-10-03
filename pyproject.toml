@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openrouter-client-unofficial"
-version = "0.0.25"
+version = "0.0.26"
 description = "Unofficial Python client for the OpenRouter API, providing a comprehensive interface for interacting with large language models"
 readme = "README.md"
 authors = [
@@ -40,6 +40,7 @@ dev = [
     "pytest>=8.3.5",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=6.0.0",
+    "python-dotenv>=1.0.0",
     "black>=21.0.0",
     "isort>=5.0.0",
     "mypy>=1.0.0",

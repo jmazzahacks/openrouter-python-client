@@ -30,7 +30,7 @@ class TestBaseEndpointInit01NominalBehaviors:
         Tests that the BaseEndpoint initializes correctly with various endpoint paths,
         ensuring leading slashes are stripped and attributes are set as expected.
         """
-        auth_manager = AuthManager()
+        auth_manager = AuthManager(api_key="test-key")
         http_manager = HTTPManager(base_url="https://example.com")
         # Mock the logger to prevent actual logging during tests
         real_logger = logging.getLogger("test")
@@ -53,7 +53,7 @@ class TestBaseEndpointInit02NegativeBehaviors:
         """
         Tests that BaseEndpoint raises a TypeError when initialized with too few arguments.
         """
-        auth_manager = AuthManager()
+        auth_manager = AuthManager(api_key="test-key")
         http_manager = HTTPManager(base_url="https://example.com")
         with pytest.raises(TypeError):
             BaseEndpoint(auth_manager, http_manager)
@@ -62,7 +62,7 @@ class TestBaseEndpointInit02NegativeBehaviors:
         """
         Tests that BaseEndpoint raises a TypeError when initialized with too many arguments.
         """
-        auth_manager = AuthManager()
+        auth_manager = AuthManager(api_key="test-key")
         http_manager = HTTPManager(base_url="https://example.com")
         with pytest.raises(TypeError):
             BaseEndpoint(auth_manager, http_manager, "path", "extra")
@@ -72,7 +72,7 @@ class TestBaseEndpointInit03BoundaryBehaviors:
         """
         Tests that BaseEndpoint handles a very long endpoint_path without errors.
         """
-        auth_manager = AuthManager()
+        auth_manager = AuthManager(api_key="test-key")
         http_manager = HTTPManager(base_url="https://example.com")
         long_path = "a" * 2048  # A very long string
         real_logger = logging.getLogger("test")
@@ -87,7 +87,7 @@ class TestBaseEndpointInit04ErrorHandlingBehaviors:
         Tests that BaseEndpoint handles exceptions during logger creation gracefully,
         falling back through the logger hierarchy until a working logger is found.
         """
-        auth_manager = AuthManager()
+        auth_manager = AuthManager(api_key="test-key")
         http_manager = HTTPManager(base_url="https://example.com")
         
         # Save reference to original getLogger function before mocking
@@ -140,7 +140,7 @@ class TestBaseEndpointGetHeaders01NominalBehaviors:
         """
         Tests that _get_headers combines authentication headers with standard headers correctly.
         """
-        auth_manager = AuthManager()
+        auth_manager = AuthManager(api_key="test-key")
         http_manager = HTTPManager(base_url="https://example.com")
         endpoint = BaseEndpoint(auth_manager, http_manager, "test_path")
         auth_headers = {"Authorization": "Bearer test_token"}
@@ -157,7 +157,7 @@ class TestBaseEndpointGetHeaders01NominalBehaviors:
         Tests that _get_headers combines authentication headers with standard headers correctly
         when require_provisioning is True.
         """
-        auth_manager = AuthManager()
+        auth_manager = AuthManager(api_key="test-key")
         http_manager = HTTPManager(base_url="https://example.com")
         endpoint = BaseEndpoint(auth_manager, http_manager, "test_path")
         auth_headers = {"Authorization": "Bearer test_token"}
@@ -174,7 +174,7 @@ class TestBaseEndpointGetHeaders02NegativeBehaviors:
         """
         Tests that _get_headers handles the case where auth_manager returns an empty dictionary.
         """
-        auth_manager = AuthManager()
+        auth_manager = AuthManager(api_key="test-key")
         http_manager = HTTPManager(base_url="https://example.com")
         endpoint = BaseEndpoint(auth_manager, http_manager, "test_path")
         mocker.patch.object(auth_manager, 'get_auth_headers', return_value={})
@@ -189,7 +189,7 @@ class TestBaseEndpointGetHeaders03BoundaryBehaviors:
         """
         Tests that _get_headers correctly passes the require_provisioning flag to auth_manager.
         """
-        auth_manager = AuthManager()
+        auth_manager = AuthManager(api_key="test-key")
         http_manager = HTTPManager(base_url="https://example.com")
         endpoint = BaseEndpoint(auth_manager, http_manager, "test_path")
         mocker.patch.object(auth_manager, 'get_auth_headers', return_value={})
@@ -200,7 +200,7 @@ class TestBaseEndpointGetHeaders03BoundaryBehaviors:
         """
         Tests that _get_headers handles long header values without errors.
         """
-        auth_manager = AuthManager()
+        auth_manager = AuthManager(api_key="test-key")
         http_manager = HTTPManager(base_url="https://example.com")
         endpoint = BaseEndpoint(auth_manager, http_manager, "test_path")
         long_header = {"Authorization": "Bearer " + "a" * 2048}
@@ -213,7 +213,7 @@ class TestBaseEndpointGetHeaders04ErrorHandlingBehaviors:
         """
         Tests that _get_headers handles exceptions raised by auth_manager gracefully.
         """
-        auth_manager = AuthManager()
+        auth_manager = AuthManager(api_key="test-key")
         http_manager = HTTPManager(base_url="https://example.com")
         endpoint = BaseEndpoint(auth_manager, http_manager, "test_path")
         mocker.patch.object(auth_manager, 'get_auth_headers', side_effect=Exception("Auth failed"))
@@ -247,7 +247,7 @@ class TestBaseEndpointGetEndpointUrl01NominalBehaviors:
         Tests that _get_endpoint_url combines the endpoint_path with the provided path correctly,
         handling various combinations of slashes and empty strings.
         """
-        auth_manager = AuthManager()
+        auth_manager = AuthManager(api_key="test-key")
         http_manager = HTTPManager(base_url="https://example.com")
         endpoint = BaseEndpoint(auth_manager, http_manager, endpoint_path)
         url = endpoint._get_endpoint_url(path)
@@ -259,7 +259,7 @@ class TestBaseEndpointGetEndpointUrl02NegativeBehaviors:
         Tests that _get_endpoint_url handles invalid URL characters in endpoint_path or path,
         though URL validation is not explicitly performed in the provided code.
         """
-        auth_manager = AuthManager()
+        auth_manager = AuthManager(api_key="test-key")
         http_manager = HTTPManager(base_url="https://example.com")
         endpoint = BaseEndpoint(auth_manager, http_manager, "api/v1")
         path_with_invalid_chars = "models?param=value#fragment"
@@ -271,7 +271,7 @@ class TestBaseEndpointGetEndpointUrl03BoundaryBehaviors:
         """
         Tests that _get_endpoint_url correctly handles a path that starts with a slash.
         """
-        auth_manager = AuthManager()
+        auth_manager = AuthManager(api_key="test-key")
         http_manager = HTTPManager(base_url="https://example.com")
         endpoint = BaseEndpoint(auth_manager, http_manager, "api/v1")
         url = endpoint._get_endpoint_url("/models")
@@ -281,7 +281,7 @@ class TestBaseEndpointGetEndpointUrl03BoundaryBehaviors:
         """
         Tests that _get_endpoint_url handles very long endpoint_path and path strings without errors.
         """
-        auth_manager = AuthManager()
+        auth_manager = AuthManager(api_key="test-key")
         http_manager = HTTPManager(base_url="https://example.com")
         long_path = "a" * 2048
         endpoint = BaseEndpoint(auth_manager, http_manager, long_path)
@@ -292,7 +292,7 @@ class TestBaseEndpointGetEndpointUrl03BoundaryBehaviors:
         """
         Tests that _get_endpoint_url handles an empty path correctly.
         """
-        auth_manager = AuthManager()
+        auth_manager = AuthManager(api_key="test-key")
         http_manager = HTTPManager(base_url="https://example.com")
         endpoint = BaseEndpoint(auth_manager, http_manager, "api/v1")
         url = endpoint._get_endpoint_url()

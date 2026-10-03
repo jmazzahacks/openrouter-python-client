@@ -8,7 +8,7 @@ Exported:
 """
 
 # Package version
-__version__ = "0.0.25"
+__version__ = "0.0.26"
 
 # Minimum supported API version
 __api_version__ = "v1"
