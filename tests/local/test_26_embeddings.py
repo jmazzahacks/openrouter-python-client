@@ -226,6 +226,25 @@ def test_embedded_errors_are_normalized(error, expected):
         embeddings.create(model="m", input="text")
 
 
+@pytest.mark.parametrize("code", [400, 402, 403, 404, 500, 502, 503, "503", "429"])
+def test_embedded_error_preserves_valid_status_code(code):
+    body = {"error": {"message": "Provider failed", "code": code}}
+    embeddings, _ = endpoint(body)
+    with pytest.raises(APIError) as caught:
+        embeddings.create(model="m", input="text")
+    assert caught.value.status_code == int(code)
+    assert caught.value.response.status_code == 200
+    assert caught.value.details["error"] == body["error"]
+
+
+@pytest.mark.parametrize("code", [None, "unavailable", {}, [], True, 503.5, 200, 600])
+def test_embedded_error_with_invalid_code_keeps_transport_status(code):
+    embeddings, _ = endpoint({"error": {"message": "Provider failed", "code": code}})
+    with pytest.raises(APIError) as caught:
+        embeddings.create(model="m", input="text")
+    assert caught.value.status_code == 200
+
+
 @pytest.mark.parametrize("kind", ["embeddings", "chat"])
 @pytest.mark.parametrize("status", [429, 500, 502, 503])
 def test_http_errors_match_chat(kind, status):

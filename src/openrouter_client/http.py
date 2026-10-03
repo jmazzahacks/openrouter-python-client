@@ -150,6 +150,12 @@ class HTTPManager:
         if smartsurge_client_logger.level <= logging.INFO:  # Only if not set to WARNING+ by user
             smartsurge_client_logger.setLevel(root_level)
 
+    def _get_request_url(self, endpoint: str) -> str:
+        """Use one URL key for requests and SmartSurge rate-limit histories."""
+        if endpoint.startswith(("http://", "https://")):
+            return endpoint
+        return f"{self.base_url.rstrip('/')}/{endpoint.lstrip('/')}"
+
     @staticmethod
     def _parse_retry_after(value: Optional[str]) -> Optional[int]:
         """Parse a Retry-After header value into integer seconds, or None if absent/unparseable."""
@@ -341,7 +347,7 @@ class HTTPManager:
             raise TypeError(f"'json' must be a dictionary, not {type(json).__name__}")
         
         # Form the full URL by combining base_url and endpoint
-        url = f"{self.base_url}/{endpoint.lstrip('/')}"
+        url = self._get_request_url(endpoint)
         
         # If headers are None, initialize as empty dictionary
         if headers is None:
@@ -619,7 +625,7 @@ class HTTPManager:
         adjust rate limiting parameters for a specific endpoint/method combination.
         
         Args:
-            endpoint (str): The API endpoint to set rate limit for.
+            endpoint (str): Relative API path or full URL to set the rate limit for.
             method (Union[str, RequestMethod]): HTTP method (GET, POST, etc.).
             max_requests (int): Maximum number of requests allowed per time period.
             time_period (float): Time period in seconds for the rate limit.
@@ -646,9 +652,10 @@ class HTTPManager:
         )
         
         try:
-            # Pass through to SmartSurgeClient
+            # SmartSurge keys histories by the exact endpoint string. Requests use
+            # full URLs, so registering a relative path would create an unused limit.
             self.client.set_rate_limit(
-                endpoint=endpoint,
+                endpoint=self._get_request_url(endpoint),
                 method=method,
                 max_requests=max_requests,
                 time_period=time_period,

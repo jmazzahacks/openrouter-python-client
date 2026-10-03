@@ -89,7 +89,19 @@ class EmbeddingsEndpoint(BaseEndpoint):
                 or "authentication" in message.lower()
             ):
                 raise AuthenticationError(message)
-            raise APIError(message, status_code=response.status_code, response=response)
+            # Providers can report a failed request inside an HTTP 200 response.
+            # Keep its valid error status for callers deciding whether to retry;
+            # the original transport status is still available on response.
+            status_code = response.status_code
+            if isinstance(code, (int, str)) and not isinstance(code, bool):
+                try:
+                    error_status = int(code)
+                except ValueError:
+                    pass
+                else:
+                    if 400 <= error_status <= 599:
+                        status_code = error_status
+            raise APIError(message, status_code=status_code, response=response)
 
         try:
             return EmbeddingsResponse.model_validate(body)
