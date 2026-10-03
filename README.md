@@ -185,6 +185,81 @@ and opt-in `retry_config=RetryConfig(...)` policy as chat. Failed requests raise
 See the [OpenRouter embeddings reference](https://openrouter.ai/docs/api/api-reference/embeddings/submit-an-embedding-request)
 for model-dependent options.
 
+### Web search and source citations
+
+Search options accept dictionaries or `WebSearchPlugin` / `WebSearchOptions`
+models. The `:online` model suffix also passes through unchanged.
+
+```python
+from openrouter_client import OpenRouterClient, UrlCitationAnnotation, WebSearchPlugin
+
+with OpenRouterClient() as client:
+    response = client.chat.create(
+        model="openai/gpt-4.1",
+        messages=[{"role": "user", "content": "Find recent NASA news and cite sources."}],
+        plugins=[WebSearchPlugin(engine="exa", max_results=5)],
+        # Native search can use web_search_options={"search_context_size": "high"}.
+    )
+
+for annotation in response.choices[0].message.annotations or []:
+    if isinstance(annotation, UrlCitationAnnotation):
+        source = annotation.url_citation
+        print(source.url, source.title, source.content)
+if response.usage is not None:
+    print(response.usage.cost)  # API-reported cost, including search charges
+```
+
+`WebSearchPlugin` supports engine, mode, maximum results, search prompt, and
+`include_domains` / `exclude_domains`. Engine-specific domain rules are enforced
+by OpenRouter. Unknown plugin settings and unknown annotation types retain their
+fields. Citation excerpts and offsets are optional; use the returned annotations
+to obtain sources rather than extracting URLs from generated prose. Streaming
+citations are available on `chunk.choices[i].delta.annotations` when supplied by
+the API.
+
+High-level prompts accept the same options and expose the final assistant
+message's annotations via `last_annotations`:
+
+```python
+from openrouter_client import get_model
+
+with OpenRouterClient() as client:
+    model = get_model("openai/gpt-4.1", client)
+    text = model.prompt("Find recent NASA news", plugins=[WebSearchPlugin(engine="exa")])
+    sources = model.last_annotations
+    cost = model.last_usage.cost if model.last_usage else None
+```
+
+`Conversation.prompt()` has the same options and `last_annotations` property, and
+keeps citations in its message history. Return types stay unchanged: text normally,
+a validated dictionary with `schema=`. Like `last_usage`, annotations update only
+after a successful prompt, and become an empty list when that answer has none.
+With `tool_loop=`, `last_annotations` refers to the final assistant message (or
+final schema response); earlier messages' citations remain in conversation history.
+`last_usage` still includes all calls in the turn. These stateful wrappers should
+not be shared between concurrent prompts.
+
+OpenRouter also offers a server-side search tool, which decides when to search.
+Its raw dictionary can be passed to `client.chat.create` with the default
+`validate_request=False`:
+
+```python
+tools = [{"type": "openrouter:web_search", "parameters": {"engine": "exa", "max_results": 5}}]
+# response = client.chat.create(model="openai/gpt-4.1", messages=[...], tools=tools)
+```
+
+Search executes on OpenRouter and needs no local search handler. The existing
+typed function-tool models and `validate_request=True` expect a `function` field,
+so use the raw dictionary for this server tool. For a high-level loop, it can be
+included in `ToolLoop.tools` alongside local function definitions; handlers are
+needed only for client-side function calls. The server tool uses `allowed_domains`
+and `excluded_domains`, whereas the plugin uses `include_domains` and
+`exclude_domains`. OpenRouter recommends server tools for new integrations; the
+plugin remains useful for a search on every request. See the
+[web plugin reference](https://openrouter.ai/docs/guides/features/plugins/web-search)
+and [server search reference](https://openrouter.ai/docs/guides/features/server-tools/web-search)
+for supported settings and pricing.
+
 ### Catalog alias metadata
 
 `client.models.list(details=True)` preserves each model's optional

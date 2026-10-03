@@ -12,6 +12,7 @@ from ..exceptions import APIError, ToolCallLimitExceeded, ToolExecutionError
 from .attachment import Attachment
 from .chat import ChatCompletionResponse, Usage
 from .core import to_plain_data
+from .web_search import MessageAnnotation, Plugin, WebSearchOptions
 
 if TYPE_CHECKING:
     from ..client import OpenRouterClient
@@ -241,6 +242,9 @@ class TurnResult(BaseModel):
     usage: Optional[Usage] = Field(
         None, description="Usage summed across the turn's API calls"
     )
+    annotations: List[MessageAnnotation] = Field(
+        default_factory=list, description="Annotations from the final assistant message"
+    )
 
 
 def _read_tool_call(call: Any) -> ToolCallRequest:
@@ -428,6 +432,12 @@ def _plain_content(content: Any) -> Any:
     return to_plain_data(content)
 
 
+def _message_annotations(message: Any) -> List[MessageAnnotation]:
+    """Copy annotations when present, tolerating older response objects."""
+    annotations = getattr(message, "annotations", None)
+    return list(annotations) if isinstance(annotations, list) else []
+
+
 def _assistant_message(message: Any) -> Dict[str, Any]:
     """
     Build the history entry for an assistant turn, preserving any tool calls.
@@ -445,6 +455,9 @@ def _assistant_message(message: Any) -> Dict[str, Any]:
     tool_calls = getattr(message, "tool_calls", None)
     if tool_calls:
         entry["tool_calls"] = _plain_content(tool_calls)
+    annotations = _message_annotations(message)
+    if annotations:
+        entry["annotations"] = to_plain_data(annotations)
     return entry
 
 
@@ -593,7 +606,9 @@ def _run_tool_rounds(
         tool_calls = getattr(message, "tool_calls", None)
         if not tool_calls:
             return TurnResult(
-                content=_content_text(message.content), usage=_combine_usage(usages)
+                content=_content_text(message.content),
+                usage=_combine_usage(usages),
+                annotations=_message_annotations(message),
             )
 
         # Check the budget BEFORE executing: handlers have side effects, and
@@ -672,9 +687,17 @@ def _run_schema_turn(
     response = _create_completion(client, model_id, messages, extra)
 
     content = _content_text(response.choices[0].message.content)
-    messages.append({"role": "assistant", "content": content})
+    annotations = _message_annotations(response.choices[0].message)
+    entry: Dict[str, Any] = {"role": "assistant", "content": content}
+    if annotations:
+        entry["annotations"] = to_plain_data(annotations)
+    messages.append(entry)
 
-    return TurnResult(content=content, usage=response.usage)
+    return TurnResult(
+        content=content,
+        usage=response.usage,
+        annotations=annotations,
+    )
 
 
 def _run_tool_loop(
@@ -756,6 +779,7 @@ def _run_tool_loop(
 
     return TurnResult(
         content=final.content,
+        annotations=final.annotations,
         usage=_combine_usage(
             [usage for usage in (rounds.usage, final.usage) if usage is not None]
         ),
@@ -804,6 +828,8 @@ class LLMModel:
         # Updated only on success: after a failed prompt() it retains the prior
         # call's value. Not safe for concurrent prompt() calls on one instance.
         self.last_usage: Optional[Usage] = None
+        # Final assistant annotations from the last successful prompt, like last_usage.
+        self.last_annotations: List[MessageAnnotation] = []
 
     def prompt(
         self,
@@ -812,6 +838,8 @@ class LLMModel:
         attachments: Optional[List[Attachment]] = None,
         schema: Optional[Dict[str, Any]] = None,
         tool_loop: Optional[ToolLoop] = None,
+        plugins: Optional[List[Plugin]] = None,
+        web_search_options: Optional[Union[WebSearchOptions, Dict[str, Any]]] = None,
         **kwargs,
     ) -> Union[str, Dict[str, Any]]:
         """
@@ -825,7 +853,10 @@ class LLMModel:
             tool_loop: Optional ToolLoop whose tools are offered to the model and
                 whose handlers execute any tool calls it makes, automatically, until
                 it produces a final answer
-            **kwargs: Additional parameters passed to chat.create()
+            plugins: Plugin dictionaries or typed WebSearchPlugin options.
+            web_search_options: Native web-search context settings.
+            **kwargs: Additional parameters passed to chat.create().
+                Citations are available in last_annotations after a successful call.
 
         Returns:
             str: Response content if no schema provided
@@ -838,6 +869,10 @@ class LLMModel:
             ToolExecutionError: If a tool call cannot be executed
             ToolCallLimitExceeded: If the model exceeds the loop's max_rounds
         """
+        if plugins is not None:
+            kwargs["plugins"] = plugins
+        if web_search_options is not None:
+            kwargs["web_search_options"] = web_search_options
         _warn_if_tools_ignored(tool_loop, kwargs)
 
         # Build messages array
@@ -867,8 +902,10 @@ class LLMModel:
             if schema:
                 parsed = parse_schema_response(result.content, schema)
                 self.last_usage = result.usage
+                self.last_annotations = list(result.annotations)
                 return parsed
             self.last_usage = result.usage
+            self.last_annotations = list(result.annotations)
             return cast(str, result.content)
 
         # Prepare chat.create() parameters
@@ -891,11 +928,13 @@ class LLMModel:
         if schema:
             parsed = parse_schema_response(content, schema)
             self.last_usage = response.usage
+            self.last_annotations = _message_annotations(response.choices[0].message)
             return parsed
 
         # Capture this call's token/cost usage (None if the response carried no
         # usage block).
         self.last_usage = response.usage
+        self.last_annotations = _message_annotations(response.choices[0].message)
 
         return content
 
@@ -978,6 +1017,8 @@ class Conversation:
         # unchanged and totals never double-count. A single Conversation is not
         # safe for concurrent prompt() calls.
         self.last_usage: Optional[Usage] = None
+        # Final assistant annotations from the last successful prompt, like last_usage.
+        self.last_annotations: List[MessageAnnotation] = []
         self.total_usage: Optional[Usage] = None
         # Tool definitions (and their handlers) accumulated from tool-loop turns
         # whose transcripts actually recorded tool activity. Once the history
@@ -1012,6 +1053,8 @@ class Conversation:
         attachments: Optional[List[Attachment]] = None,
         schema: Optional[Dict[str, Any]] = None,
         tool_loop: Optional[ToolLoop] = None,
+        plugins: Optional[List[Plugin]] = None,
+        web_search_options: Optional[Union[WebSearchOptions, Dict[str, Any]]] = None,
         **kwargs,
     ) -> Union[str, Dict[str, Any]]:
         """
@@ -1025,7 +1068,10 @@ class Conversation:
                 whose handlers execute any tool calls it makes, automatically, until
                 it produces a final answer. Every assistant turn (with its tool_calls)
                 and every tool result is kept in this conversation's history.
-            **kwargs: Additional parameters passed to chat.create()
+            plugins: Plugin dictionaries or typed WebSearchPlugin options.
+            web_search_options: Native web-search context settings.
+            **kwargs: Additional parameters passed to chat.create().
+                Citations are available in last_annotations after a successful call.
 
         Returns:
             str: Response content if no schema provided
@@ -1038,6 +1084,10 @@ class Conversation:
             ToolExecutionError: If a tool call cannot be executed
             ToolCallLimitExceeded: If the model exceeds the loop's max_rounds
         """
+        if plugins is not None:
+            kwargs["plugins"] = plugins
+        if web_search_options is not None:
+            kwargs["web_search_options"] = web_search_options
         _warn_if_tools_ignored(tool_loop, kwargs)
 
         # Depth before this turn's user message, so a failed tool loop can undo
@@ -1094,6 +1144,7 @@ class Conversation:
                 raise
 
             self.last_usage = result.usage
+            self.last_annotations = list(result.annotations)
             self.total_usage = _accumulate_usage(self.total_usage, self.last_usage)
 
             # Retain definitions only when this turn actually put tool activity
@@ -1151,10 +1202,14 @@ class Conversation:
 
         # Capture this turn's usage and fold it into the conversation running total.
         self.last_usage = response.usage
+        self.last_annotations = _message_annotations(response.choices[0].message)
         self.total_usage = _accumulate_usage(self.total_usage, self.last_usage)
 
         # Add assistant response to conversation history
-        self.messages.append({"role": "assistant", "content": response_content})
+        entry: Dict[str, Any] = {"role": "assistant", "content": response_content}
+        if self.last_annotations:
+            entry["annotations"] = to_plain_data(self.last_annotations)
+        self.messages.append(entry)
 
         if parsed_response is not None:
             return parsed_response

@@ -135,7 +135,23 @@ from .embeddings import (
     EmbeddingsResponse,
 )
 
+from .web_search import (
+    Annotation,
+    MessageAnnotation,
+    UrlCitation,
+    UrlCitationAnnotation,
+    WebSearchOptions,
+    WebSearchPlugin,
+)
+
 __all__ = [
+    "Annotation",
+    "MessageAnnotation",
+    "UrlCitation",
+    "UrlCitationAnnotation",
+    "WebSearchOptions",
+    "WebSearchPlugin",
+
     "Embedding",
     "EmbeddingCostDetails",
     "EmbeddingUsage",

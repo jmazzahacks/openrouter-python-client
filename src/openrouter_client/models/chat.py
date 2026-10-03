@@ -48,6 +48,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator, field_valida
 from ..types import ModelRole, FinishReason
 from .core import Message, FunctionDefinition, ResponseFormat, ToolDefinition, Prediction
 from .providers import ProviderPreferences
+from .web_search import MessageAnnotation, Plugin, WebSearchOptions
 
 
 class CostDetails(BaseModel):
@@ -314,6 +315,9 @@ class ChatCompletionRequest(BaseModel):
     route: Optional[str] = Field(None, description="Model routing strategy, e.g., 'fallback'")
     reasoning: Optional["ReasoningConfig"] = Field(None, description="Configuration for reasoning tokens")
     
+    plugins: Optional[List[Plugin]] = None
+    web_search_options: Optional[Union[WebSearchOptions, Dict[str, Any]]] = None
+
     @model_validator(mode="after")
     def validate_function_and_tools(self) -> "ChatCompletionRequest":
         """
@@ -384,6 +388,8 @@ class ChatCompletionStreamResponseDelta(BaseModel):
     content: Optional[Union[str, List[Dict[str, Any]]]] = Field(None, description="Content of the message")
     function_call: Optional[Dict[str, Any]] = Field(None, description="Function call details if applicable")
     tool_calls: Optional[List[Dict[str, Any]]] = Field(None, description="Tool calls details if applicable")
+
+    annotations: Optional[List[MessageAnnotation]] = None
 
 
 class ChatCompletionStreamResponseChoice(BaseModel):

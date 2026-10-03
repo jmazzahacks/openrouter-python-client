@@ -29,6 +29,7 @@ from ..models.chat import (
     Usage,
 )
 from ..models.core import FunctionDefinition, ResponseFormat, to_plain_data
+from ..models.web_search import Plugin, WebSearchOptions
 from ..streaming import StreamingChatCompletionsRequest
 from ..types import FinishReason
 from .base import BaseEndpoint
@@ -414,6 +415,8 @@ class ChatEndpoint(BaseEndpoint):
         chunk_size: int = 8192,
         include: Optional[Dict[str, bool]] = None,
         validate_request: bool = False,
+        plugins: Optional[List[Plugin]] = None,
+        web_search_options: Optional[Union[WebSearchOptions, Dict[str, Any]]] = None,
         **kwargs,
     ) -> Union[ChatCompletionResponse, Iterator[ChatCompletionStreamResponse]]:
         """
@@ -447,6 +450,8 @@ class ChatEndpoint(BaseEndpoint):
             include (Optional[Dict[str, bool]]): Fields to include in the response.
                 Set {"usage": true} to get token usage statistics including cache metrics.
             validate_request (bool): Whether to validate the request using ChatCompletionRequest model.
+            plugins: Plugin dictionaries or typed WebSearchPlugin options.
+            web_search_options: Native web-search context settings.
             **kwargs: Additional parameters to pass to the API.
 
         Returns:
@@ -480,6 +485,8 @@ class ChatEndpoint(BaseEndpoint):
                     "reasoning": reasoning,
                     "include_reasoning": include_reasoning,
                     "include": include,
+                    "plugins": plugins,
+                    "web_search_options": web_search_options,
                     **kwargs,
                 }
                 validated_request = self._create_request_model(
@@ -496,7 +503,7 @@ class ChatEndpoint(BaseEndpoint):
             if isinstance(msg, Message):
                 processed_messages.append(msg.model_dump())
             else:
-                processed_messages.append(msg)
+                processed_messages.append(to_plain_data(msg))
 
         # Build data dictionary with non-None values that will be used for both streaming and non-streaming
         data = {"messages": processed_messages}
@@ -561,6 +568,11 @@ class ChatEndpoint(BaseEndpoint):
         # Add include parameter for usage statistics (including cache information)
         if include is not None:
             data["include"] = include
+
+        if plugins is not None:
+            data["plugins"] = to_plain_data(plugins)
+        if web_search_options is not None:
+            data["web_search_options"] = to_plain_data(web_search_options)
 
         # Add any additional kwargs (for backward compatibility)
         for key, value in kwargs.items():

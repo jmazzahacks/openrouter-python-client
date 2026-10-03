@@ -97,7 +97,23 @@ from .models.embeddings import (
     EmbeddingsResponse,
 )
 
+from .models.web_search import (
+    Annotation,
+    MessageAnnotation,
+    UrlCitation,
+    UrlCitationAnnotation,
+    WebSearchOptions,
+    WebSearchPlugin,
+)
+
 __all__ = [
+    "Annotation",
+    "MessageAnnotation",
+    "UrlCitation",
+    "UrlCitationAnnotation",
+    "WebSearchOptions",
+    "WebSearchPlugin",
+
     "Embedding",
     "EmbeddingCostDetails",
     "EmbeddingUsage",

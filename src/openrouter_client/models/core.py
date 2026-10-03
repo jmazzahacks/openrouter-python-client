@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, Field, model_validator
 
 from ..types import ModelRole
+from .web_search import Annotation, MessageAnnotation, WebSearchOptions, WebSearchPlugin
 
 
 def to_plain_data(value: Any) -> Any:
@@ -34,6 +35,17 @@ def to_plain_data(value: Any) -> Any:
     Returns:
         Any: The value with all Pydantic models dumped to dicts.
     """
+    if isinstance(value, Annotation):
+        # Response metadata must survive replay, including explicit nulls in
+        # unfamiliar fields. Omit unset citation fields, but always emit the
+        # discriminator even when a typed citation used its default type.
+        return {"type": value.type, **value.model_dump(exclude_unset=True)}
+    if isinstance(value, (WebSearchPlugin, WebSearchOptions)):
+        # Known None options mean "use the API default". Unknown options must
+        # retain caller-supplied nulls, just as their dictionary form does.
+        data = value.model_dump(exclude_none=True)
+        data.update(to_plain_data(value.model_extra or {}))
+        return data
     if isinstance(value, BaseModel):
         return value.model_dump(exclude_none=True)
     if isinstance(value, list):
@@ -241,6 +253,10 @@ class Message(BaseModel):
     tool_call_id: Optional[str] = Field(
         None,
         description="Required when role is 'tool', the ID of the tool call being responded to",
+    )
+
+    annotations: Optional[List[MessageAnnotation]] = Field(
+        None, description="Source citations and other response annotations"
     )
 
     @model_validator(mode="after")
