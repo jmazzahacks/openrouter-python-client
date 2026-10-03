@@ -19,6 +19,7 @@ Key Features:
 Available Endpoints:
 - client.chat: Chat completions API with streaming and function calling support
 - client.completions: Text completions API with streaming support
+- client.embeddings: Single and batch text embeddings with usage/cost
 - client.models: Model information, context lengths, and pricing
 - client.generations: Generation metadata and details
 - client.credits: Credit balance and usage tracking
@@ -54,6 +55,7 @@ from .http import HTTPManager
 from .endpoints.completions import CompletionsEndpoint
 from .endpoints.chat import ChatEndpoint
 from .endpoints.images import ImagesEndpoint
+from .endpoints.embeddings import EmbeddingsEndpoint
 from .endpoints.models import ModelsEndpoint
 from .endpoints.generations import GenerationsEndpoint
 from .endpoints.credits import CreditsEndpoint
@@ -71,6 +73,7 @@ class OpenRouterClient:
         completions (CompletionsEndpoint): Text completions endpoint handler.
         chat (ChatEndpoint): Chat completions endpoint handler.
         models (ModelsEndpoint): Model information endpoint handler.
+        embeddings (EmbeddingsEndpoint): Text embeddings endpoint handler.
         images (ImagesEndpoint): Image generation endpoint handler.
         generations (GenerationsEndpoint): Generation statistics endpoint handler.
         credits (CreditsEndpoint): Credits management endpoint handler.
@@ -186,6 +189,11 @@ class OpenRouterClient:
             http_manager=self.http_manager
         )
         
+        self.embeddings = EmbeddingsEndpoint(
+            auth_manager=self.auth_manager,
+            http_manager=self.http_manager
+        )
+
         # Create ImagesEndpoint with auth_manager and http_manager
         self.images = ImagesEndpoint(
             auth_manager=self.auth_manager,
@@ -535,8 +543,8 @@ class OpenRouterClient:
                 self.logger.error(f"Error closing HTTP manager: {str(e)}")
         
         # Clear all endpoint instances to release their resources
-        for endpoint_name in ['completions', 'chat', 'models', 'images', 'generations',
-                             'credits', 'keys']:
+        for endpoint_name in ['completions', 'chat', 'models', 'images', 'embeddings',
+                             'generations', 'credits', 'keys']:
             if hasattr(self, endpoint_name):
                 try:
                     setattr(self, endpoint_name, None)

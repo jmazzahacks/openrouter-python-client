@@ -956,6 +956,7 @@ class Test_HTTPManager_SetGlobalRateLimit_01_NominalBehaviors:
         expected_endpoints = [
             ('/chat/completions', 'POST'),
             ('/completions', 'POST'),
+            ('/embeddings', 'POST'),
             ('/models', 'GET'),
             ('/credits', 'GET'),
             ('/generation', 'GET'),
@@ -1009,5 +1010,5 @@ class Test_HTTPManager_SetGlobalRateLimit_04_ErrorHandlingBehaviors:
             time_period=60.0
         )
         
-        # Verify set_rate_limit was called 8 times (all endpoints)
-        assert mock_client.set_rate_limit.call_count == 8
+        # Verify set_rate_limit was called 9 times (all endpoints)
+        assert mock_client.set_rate_limit.call_count == 9

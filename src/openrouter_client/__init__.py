@@ -89,7 +89,20 @@ from .tools import (
 from .exceptions import ImageGenerationError, ImageGenerationFatal, ImageRefused
 from .models.images import ImageGenerationRequest, ImageGenerationResponse, ImageReference
 
+from .models.embeddings import (
+    Embedding,
+    EmbeddingCostDetails,
+    EmbeddingUsage,
+    EmbeddingsRequest,
+    EmbeddingsResponse,
+)
+
 __all__ = [
+    "Embedding",
+    "EmbeddingCostDetails",
+    "EmbeddingUsage",
+    "EmbeddingsRequest",
+    "EmbeddingsResponse",
     # Core client and utilities
     'OpenRouterClient',
     '__version__',

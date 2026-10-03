@@ -127,7 +127,20 @@ from .llm import (
     parse_schema_response,
 )
 
+from .embeddings import (
+    Embedding,
+    EmbeddingCostDetails,
+    EmbeddingUsage,
+    EmbeddingsRequest,
+    EmbeddingsResponse,
+)
+
 __all__ = [
+    "Embedding",
+    "EmbeddingCostDetails",
+    "EmbeddingUsage",
+    "EmbeddingsRequest",
+    "EmbeddingsResponse",
     'CapabilityDescriptor',
     'ImageArchitecture',
     'ImageData',

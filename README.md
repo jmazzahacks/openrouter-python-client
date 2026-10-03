@@ -143,6 +143,48 @@ cannot be safely re-sent.
 
 ## Examples
 
+### Text embeddings
+
+Embed a single string or a batch with `client.embeddings.create`. Match vectors to
+inputs using each result's `index`; response order is not an input-order guarantee.
+
+```python
+from openrouter_client import OpenRouterClient
+
+articles = ["First article title and excerpt", "Second article title and excerpt"]
+with OpenRouterClient() as client:  # reads OPENROUTER_API_KEY
+    result = client.embeddings.create(
+        model="openai/text-embedding-3-small",
+        input=articles,  # a single string is also accepted
+        encoding_format="float",
+        # dimensions=256,  # optional, when supported by the model
+        # provider={"only": ["OpenAI"]},
+        # user="reader-123",
+    )
+
+vectors_by_index = {item.index: item.embedding for item in result.data}
+for index, article in enumerate(articles):
+    print(article, len(vectors_by_index[index]))
+if result.usage is not None:
+    print(result.usage.prompt_tokens, result.usage.total_tokens, result.usage.cost)
+```
+
+The response is an `EmbeddingsResponse` with typed `Embedding` items and optional
+`EmbeddingUsage`. Missing usage or cost stays `None`, so callers enforcing a budget
+can distinguish unknown cost from zero. For BYOK requests, OpenRouter cost may be
+zero while `usage.cost_details.upstream_inference_cost` records the provider charge;
+`usage.is_byok` identifies that case. The returned `model` is preserved as sent
+by the API. `encoding_format="base64"` returns encoded strings instead of float
+lists. Provider preferences accept a dictionary or `ProviderPreferences` model.
+
+The endpoint supports `dimensions`, `encoding_format`, `input_type`, `provider`,
+`user`, `session_id`, and `trace`; additional keyword arguments pass through to the
+request body. It uses the same authentication, SmartSurge transport, rate limiting,
+and opt-in `retry_config=RetryConfig(...)` policy as chat. Failed requests raise
+`APIError` or its rate-limit subtype; malformed responses also raise `APIError`.
+See the [OpenRouter embeddings reference](https://openrouter.ai/docs/api/api-reference/embeddings/submit-an-embedding-request)
+for model-dependent options.
+
 ### Catalog alias metadata
 
 `client.models.list(details=True)` preserves each model's optional
@@ -489,6 +531,7 @@ either shape works with the tool loop — but do not assume a format if you pars
 
 - `client.chat`: Chat completions API
 - `client.completions`: Text completions API
+- `client.embeddings`: Single and batch text embeddings with token usage and cost
 - `client.models`: Model information and selection
 - `client.generations`: Generation metadata and details
 - `client.credits`: Credit management and usage tracking

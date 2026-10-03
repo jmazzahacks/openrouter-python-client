@@ -678,6 +678,7 @@ class HTTPManager:
         common_endpoints = [
             ('/chat/completions', 'POST'),
             ('/completions', 'POST'),
+            ('/embeddings', 'POST'),
             ('/models', 'GET'),
             ('/credits', 'GET'),
             ('/generation', 'GET'),

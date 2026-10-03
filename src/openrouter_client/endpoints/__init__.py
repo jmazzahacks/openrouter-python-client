@@ -15,6 +15,7 @@ Exported:
 """
 
 from .base import BaseEndpoint
+from .embeddings import EmbeddingsEndpoint
 from .chat import ChatEndpoint
 from .completions import CompletionsEndpoint
 from .models import ModelsEndpoint
@@ -23,6 +24,7 @@ from .generations import GenerationsEndpoint
 from .keys import KeysEndpoint
 
 __all__ = [
+    "EmbeddingsEndpoint",
     'BaseEndpoint',
     'ChatEndpoint',
     'CompletionsEndpoint',

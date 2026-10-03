@@ -228,6 +228,8 @@ def _mock_all_endpoints():
         CompletionsEndpoint=Mock(),
         ChatEndpoint=Mock(),
         ModelsEndpoint=Mock(),
+        ImagesEndpoint=Mock(),
+        EmbeddingsEndpoint=Mock(),
         GenerationsEndpoint=Mock(),
         CreditsEndpoint=Mock(),
         KeysEndpoint=mock_keys_cls,
