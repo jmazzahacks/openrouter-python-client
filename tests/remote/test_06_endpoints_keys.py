@@ -26,6 +26,7 @@ class TestKeysEndpointFixtures:
         return KeysEndpoint(auth_manager, http_manager)
 
 
+@pytest.mark.usefixtures("provisioning_api_key")
 class Test_KeysEndpoint_List_01_NominalBehaviors(TestKeysEndpointFixtures):
     """Test nominal HTTP request behaviors for KeysEndpoint.list() method."""
     
@@ -123,6 +124,7 @@ class Test_KeysEndpoint_List_01_NominalBehaviors(TestKeysEndpointFixtures):
         assert "data" in response
 
 
+@pytest.mark.usefixtures("provisioning_api_key")
 class Test_KeysEndpoint_List_02_NegativeBehaviors(TestKeysEndpointFixtures):
     """Test negative HTTP request behaviors for KeysEndpoint.list() method."""
     
@@ -173,6 +175,7 @@ class Test_KeysEndpoint_List_02_NegativeBehaviors(TestKeysEndpointFixtures):
             insufficient_endpoint.list()
 
 
+@pytest.mark.usefixtures("provisioning_api_key")
 class Test_KeysEndpoint_Get_01_NominalBehaviors(TestKeysEndpointFixtures):
     """Test nominal HTTP request behaviors for KeysEndpoint.get() method."""
     
@@ -200,6 +203,7 @@ class Test_KeysEndpoint_Get_01_NominalBehaviors(TestKeysEndpointFixtures):
             keys_endpoint.delete(key_hash)
 
 
+@pytest.mark.usefixtures("provisioning_api_key")
 class Test_KeysEndpoint_Create_01_NominalBehaviors(TestKeysEndpointFixtures):
     """Test nominal HTTP request behaviors for KeysEndpoint.create() method."""
     
@@ -273,6 +277,7 @@ class Test_KeysEndpoint_Create_01_NominalBehaviors(TestKeysEndpointFixtures):
             keys_endpoint.delete(result["data"]["hash"])
 
 
+@pytest.mark.usefixtures("provisioning_api_key")
 class Test_KeysEndpoint_Update_01_NominalBehaviors(TestKeysEndpointFixtures):
     """Test nominal HTTP request behaviors for KeysEndpoint.update() method."""
     
@@ -320,6 +325,7 @@ class Test_KeysEndpoint_Update_01_NominalBehaviors(TestKeysEndpointFixtures):
             keys_endpoint.delete(key_hash)
 
 
+@pytest.mark.usefixtures("provisioning_api_key")
 class Test_KeysEndpoint_Delete_01_NominalBehaviors(TestKeysEndpointFixtures):
     """Test nominal HTTP request behaviors for KeysEndpoint.delete() method."""
     
@@ -365,6 +371,7 @@ class Test_KeysEndpoint_Delete_01_NominalBehaviors(TestKeysEndpointFixtures):
             keys_endpoint.get(key_hash)
 
 
+@pytest.mark.usefixtures("provisioning_api_key")
 class Test_KeysEndpoint_Delete_02_NegativeBehaviors(TestKeysEndpointFixtures):
     """Test negative HTTP request behaviors for KeysEndpoint.delete() method."""
     
@@ -397,6 +404,7 @@ class Test_KeysEndpoint_Delete_02_NegativeBehaviors(TestKeysEndpointFixtures):
             keys_endpoint.delete(key_hash)
 
 
+@pytest.mark.usefixtures("provisioning_api_key")
 class Test_KeysEndpoint_StateTransitions(TestKeysEndpointFixtures):
     """Test state transition behaviors across all endpoints."""
     
@@ -502,7 +510,7 @@ class Test_KeysEndpoint_GetCurrent_01_NominalBehaviors(TestKeysEndpointFixtures)
         # Assert
         rate_limit = response["data"]["rate_limit"]
         assert isinstance(rate_limit["requests"], int)
-        assert rate_limit["requests"] > 0
+        # Non-positive requests (currently -1) means unlimited.
         assert isinstance(rate_limit["interval"], str)
         # Interval should be in format like "10s", "60s", etc.
         assert rate_limit["interval"].endswith("s")
@@ -652,6 +660,5 @@ class Test_KeysEndpoint_GetCurrent_05_StateTransitionBehaviors(TestKeysEndpointF
         # Usage should be non-negative
         assert response["data"]["usage"] >= 0
         
-        # Rate limits should be reasonable
-        assert response["data"]["rate_limit"]["requests"] > 0
-        assert response["data"]["rate_limit"]["requests"] <= 10000  # Reasonable upper bound
+        # Non-positive requests is the API's unlimited-rate sentinel.
+        assert isinstance(response["data"]["rate_limit"]["requests"], int)

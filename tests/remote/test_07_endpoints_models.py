@@ -116,7 +116,7 @@ class Test_ModelsEndpoint_List_01_NominalBehaviors:
         ({"limit": 10}, "single limit parameter"),
         ({"offset": 5}, "single offset parameter"),
         ({"limit": 10, "offset": 5}, "limit and offset combined"),
-        ({"limit": 10, "offset": 5, "sort": "name"}, "multiple query parameters"),
+        ({"limit": 10, "offset": 5, "sort": "newest"}, "multiple query parameters"),
         ({"custom_param": "custom_value"}, "custom parameter passthrough")
     ])
     def test_list_models_handles_additional_query_parameters(self, models_endpoint, kwargs, description):

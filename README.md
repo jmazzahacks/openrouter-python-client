@@ -619,3 +619,28 @@ This project is licensed under the Apache 2.0 License - see the LICENSE file for
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+### Running tests
+
+Run `pytest tests/local` for fully mocked tests. The live `tests/remote` suite
+loads the repository's `.env`; exported environment variables take precedence.
+It skips entirely without `OPENROUTER_API_KEY`. Account-management tests also
+require `OPENROUTER_PROVISIONING_API_KEY`; ordinary chat, completions, and
+current-key checks run with a regular key alone.
+
+Live inference costs credits. Prefer a targeted file or test, for example:
+
+```bash
+source bin/activate
+pytest tests/remote/test_03_endpoints_completions.py -k successful_non_streaming
+```
+
+`OPENROUTER_TEST_MODEL` overrides the general chat/completions test model
+(default `openai/gpt-4o-mini`) when a provider is unavailable. Explicit
+cross-provider cases retain their own models. The override changes model
+selection without adding automatic skips or retries.
+To verify credential-free skipping even when `.env` contains keys:
+
+```bash
+OPENROUTER_API_KEY='' OPENROUTER_PROVISIONING_API_KEY='' pytest tests/remote
+```

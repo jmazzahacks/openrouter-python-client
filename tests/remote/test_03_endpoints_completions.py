@@ -11,6 +11,9 @@ from openrouter_client.exceptions import ResumeError, APIError
 from openrouter_client.http import HTTPManager
 from openrouter_client.models.completions import CompletionsResponse, CompletionsStreamResponse, CompletionsRequest
 
+# Override when a provider is unavailable; errors still fail the tests.
+TEST_MODEL = os.getenv("OPENROUTER_TEST_MODEL", "openai/gpt-4o-mini")
+
 @pytest.fixture(scope="session")
 def http_manager():
     """
@@ -26,12 +29,7 @@ def auth_manager():
     Returns:
         AuthManager: Authenticated AuthManager instance.
         
-    Raises:
-        APIError: If API key or provisioning API key is not set in environment variables.
     """
-    if not os.environ.get("OPENROUTER_API_KEY") or not os.environ.get("OPENROUTER_PROVISIONING_API_KEY"):
-        raise APIError("API key or provisioning API key not set in environment variables.")
-    
     return AuthManager()
 
 @pytest.fixture()
@@ -115,9 +113,9 @@ class Test_CompletionsEndpoint_Create_01_NominalBehaviors:
     """Test nominal behaviors for the create method - successful HTTP operations with valid inputs."""
     
     @pytest.mark.parametrize("prompt,model,expected_response_type", [
-        ("Hello, world!", "qwen/qwen3-8b", CompletionsResponse),
+        ("Hello, world!", TEST_MODEL, CompletionsResponse),
         ("Write a short poem about coding", "mistralai/mistral-small-3.1-24b-instruct", CompletionsResponse),
-        ("Explain quantum computing briefly", "qwen/qwen3-8b", CompletionsResponse),
+        ("Explain quantum computing briefly", TEST_MODEL, CompletionsResponse),
     ])
     def test_successful_non_streaming_http_requests(self, completions_endpoint, prompt, model, expected_response_type):
         """Test successful non-streaming HTTP completion requests to OpenRouter API with various models."""
@@ -139,7 +137,7 @@ class Test_CompletionsEndpoint_Create_01_NominalBehaviors:
         assert response.choices[0].text is not None
 
     @pytest.mark.parametrize("prompt,model", [
-        ("Hello, world!", "qwen/qwen3-8b"),
+        ("Hello, world!", TEST_MODEL),
         ("Write a short story about AI", "mistralai/mistral-small-3.1-24b-instruct"),
     ])
     def test_successful_streaming_http_requests(self, completions_endpoint, prompt, model):
@@ -171,7 +169,7 @@ class Test_CompletionsEndpoint_Create_01_NominalBehaviors:
         """Test proper HTTP transmission of JSON payload with all supported parameters to OpenRouter API."""
         # Arrange
         prompt = "Test parameter transmission"
-        model = "qwen/qwen3-8b"
+        model = TEST_MODEL
         
         # Act
         response = completions_endpoint.create(
@@ -193,7 +191,7 @@ class Test_CompletionsEndpoint_Create_01_NominalBehaviors:
         """Test that authentication headers are properly included in HTTP requests to OpenRouter API."""
         # Arrange
         prompt = "Test authentication header"
-        model = "qwen/qwen3-8b"
+        model = TEST_MODEL
         
         # Act
         response = completions_endpoint.create(
@@ -211,7 +209,7 @@ class Test_CompletionsEndpoint_Create_01_NominalBehaviors:
         """Test correct endpoint URL construction for OpenRouter API calls."""
         # Arrange
         prompt = "Test endpoint URL"
-        model = "qwen/qwen3-8b"
+        model = TEST_MODEL
         
         # Act
         response = completions_endpoint.create(
@@ -233,7 +231,7 @@ class Test_CompletionsEndpoint_Create_01_NominalBehaviors:
         """Test HTTP transmission of tools parameter to OpenRouter API."""
         # Arrange
         prompt = "What's the weather like?"
-        model = "qwen/qwen3-8b"
+        model = TEST_MODEL
         actual_tools = sample_tools if tools == "sample_tools" else None
         
         # Act
@@ -320,7 +318,7 @@ class Test_CompletionsEndpoint_Create_02_NegativeBehaviors:
         with pytest.raises(APIError) as exc_info:
             completions_endpoint.create(
                 prompt="Test prompt",
-                model="qwen/qwen3-8b",
+                model=TEST_MODEL,
                 max_tokens=20
             )
         
@@ -359,7 +357,7 @@ class Test_CompletionsEndpoint_Create_02_NegativeBehaviors:
         """Test HTTP requests with unsupported parameter values to OpenRouter API."""
         # Arrange
         prompt = "Test prompt"
-        model = "qwen/qwen3-8b"
+        model = TEST_MODEL
         
         # Act & Assert
         with pytest.raises(APIError) as exc_info:
@@ -390,24 +388,18 @@ class Test_CompletionsEndpoint_Create_02_NegativeBehaviors:
         """Test HTTP timeout scenarios during API communication with OpenRouter."""
         # Arrange - Use a very small max_tokens to minimize request time
         prompt = "Test timeout handling"
-        model = "qwen/qwen3-8b"
+        model = TEST_MODEL
         
         # Act - Make request with expectation it should normally succeed
         # Note: We can't easily force timeouts without mocking, so we test normal operation
-        try:
-            response = completions_endpoint.create(
-                prompt=prompt,
-                model=model,
-                max_tokens=5,  # Small to minimize chance of timeout
-                stream=False
-            )
-            # Assert - Should succeed under normal conditions
-            assert isinstance(response, CompletionsResponse)
-        except APIError as e:
-            # If we get timeout-related errors, ensure they're handled appropriately
-            error_str = str(e).lower()
-            if "timeout" in error_str:
-                assert "timeout" in error_str  # Timeout errors should be properly identified
+        response = completions_endpoint.create(
+            prompt=prompt,
+            model=model,
+            max_tokens=5,  # Small to minimize chance of timeout
+            stream=False
+        )
+        # Unexpected API failures must not turn this success check green.
+        assert isinstance(response, CompletionsResponse)
 
 class Test_CompletionsEndpoint_Create_03_BoundaryBehaviors:
     """Test boundary behaviors for the create method - HTTP requests with edge case values."""
@@ -421,7 +413,7 @@ class Test_CompletionsEndpoint_Create_03_BoundaryBehaviors:
         """Test HTTP requests with boundary values for max_tokens to OpenRouter API."""
         # Arrange
         prompt = "Test"
-        model = "qwen/qwen3-8b"
+        model = TEST_MODEL
         
         # Act
         response = completions_endpoint.create(
@@ -445,7 +437,7 @@ class Test_CompletionsEndpoint_Create_03_BoundaryBehaviors:
         """Test HTTP requests with boundary temperature values to OpenRouter API."""
         # Arrange
         prompt = "Test temperature boundary"
-        model = "qwen/qwen3-8b"
+        model = TEST_MODEL
         
         # Act
         response = completions_endpoint.create(
@@ -468,7 +460,7 @@ class Test_CompletionsEndpoint_Create_03_BoundaryBehaviors:
         """Test HTTP requests with boundary top_p values to OpenRouter API."""
         # Arrange
         prompt = "Test top_p boundary"
-        model = "qwen/qwen3-8b"
+        model = TEST_MODEL
         
         # Act
         response = completions_endpoint.create(
@@ -486,7 +478,7 @@ class Test_CompletionsEndpoint_Create_03_BoundaryBehaviors:
         """Test HTTP request with extremely large prompt payload to OpenRouter API."""
         # Arrange
         large_prompt = "This is a test prompt that will be repeated many times. " * 200
-        model = "qwen/qwen3-8b"
+        model = TEST_MODEL
         
         # Act
         response = completions_endpoint.create(
@@ -508,7 +500,7 @@ class Test_CompletionsEndpoint_Create_03_BoundaryBehaviors:
         """Test HTTP requests with boundary values for n parameter to OpenRouter API."""
         # Arrange
         prompt = "Test multiple completions"
-        model = "qwen/qwen3-8b"
+        model = TEST_MODEL
         
         # Act
         response = completions_endpoint.create(
@@ -537,7 +529,7 @@ class Test_CompletionsEndpoint_Create_03_BoundaryBehaviors:
         """Test HTTP transmission of boundary stop sequence values to OpenRouter API."""
         # Arrange
         prompt = "Write a sentence"
-        model = "qwen/qwen3-8b"
+        model = TEST_MODEL
         
         # Act
         response = completions_endpoint.create(
@@ -563,7 +555,7 @@ class Test_CompletionsEndpoint_Create_04_ErrorHandlingBehaviors:
         with pytest.raises(APIError) as exc_info:
             completions_endpoint.create(
                 prompt="Test unauthorized",
-                model="qwen/qwen3-8b",
+                model=TEST_MODEL,
                 max_tokens=20
             )
         
@@ -574,7 +566,7 @@ class Test_CompletionsEndpoint_Create_04_ErrorHandlingBehaviors:
         """Test handling of HTTP 429 rate limiting responses from OpenRouter API."""
         # Arrange - Make multiple requests rapidly to potentially trigger rate limiting
         prompt = "Rate limit test"
-        model = "qwen/qwen3-8b"
+        model = TEST_MODEL
         
         # Act - Try multiple rapid requests
         successful_requests = 0
@@ -631,7 +623,7 @@ class Test_CompletionsEndpoint_Create_04_ErrorHandlingBehaviors:
         try:
             response = completions_endpoint.create(
                 prompt=prompt,
-                model="qwen/qwen3-8b",
+                model=TEST_MODEL,
                 max_tokens=-1,
                 stream=False
             )
@@ -647,7 +639,7 @@ class Test_CompletionsEndpoint_Create_04_ErrorHandlingBehaviors:
         """Test handling of malformed response JSON parsing errors from OpenRouter API."""
         # Arrange
         prompt = "Test JSON parsing"
-        model = "qwen/qwen3-8b"
+        model = TEST_MODEL
         
         # Act - Make normal request (we expect this to succeed with valid JSON)
         response = completions_endpoint.create(
@@ -668,7 +660,7 @@ class Test_CompletionsEndpoint_Create_04_ErrorHandlingBehaviors:
         
         # Arrange
         prompt = "Test connectivity"
-        model = "qwen/qwen3-8b"
+        model = TEST_MODEL
         
         # Act - Normal request should succeed
         try:
@@ -692,7 +684,7 @@ class Test_CompletionsEndpoint_Create_05_StateTransitionBehaviors:
         """Test HTTP request state transitions between non-streaming and streaming modes."""
         # Arrange
         prompt = "Test streaming transition"
-        model = "qwen/qwen3-8b"
+        model = TEST_MODEL
         
         # Act
         response = completions_endpoint.create(
@@ -715,7 +707,7 @@ class Test_CompletionsEndpoint_Create_05_StateTransitionBehaviors:
         """Test HTTP request state changes when validate_request is enabled vs disabled."""
         # Arrange
         prompt = "Test validation state"
-        model = "qwen/qwen3-8b"
+        model = TEST_MODEL
         
         # Act
         response = completions_endpoint.create(
@@ -735,7 +727,7 @@ class Test_CompletionsEndpoint_Create_05_StateTransitionBehaviors:
         # Arrange
         prompt1 = "First HTTP request"
         prompt2 = "Second HTTP request"
-        model = "qwen/qwen3-8b"
+        model = TEST_MODEL
         
         # Act - Make sequential HTTP requests
         response1 = completions_endpoint.create(
@@ -766,7 +758,7 @@ class Test_CompletionsEndpoint_Create_05_StateTransitionBehaviors:
         # Arrange
         base_params = {
             "prompt": "Test parameter transitions",
-            "model": "qwen/qwen3-8b",
+            "model": TEST_MODEL,
             "max_tokens": 15
         }
         
@@ -795,7 +787,7 @@ class Test_CompletionsEndpoint_ResumeStream_01_NominalBehaviors:
         """Test successful HTTP request resumption from valid state file to OpenRouter API."""
         # Arrange - Create initial streaming HTTP request
         prompt = "Write a detailed story about artificial intelligence and its impact on society"
-        model = "qwen/qwen3-8b"
+        model = TEST_MODEL
         
         # Start streaming HTTP request and save state
         stream_iterator = completions_endpoint.create(
@@ -828,7 +820,7 @@ class Test_CompletionsEndpoint_ResumeStream_01_NominalBehaviors:
         """Test proper authentication header restoration from saved HTTP state."""
         # Arrange - Create streaming request with authentication
         prompt = "Explain machine learning concepts"
-        model = "qwen/qwen3-8b"
+        model = TEST_MODEL
         
         stream_iterator = completions_endpoint.create(
             prompt=prompt,
@@ -860,7 +852,7 @@ class Test_CompletionsEndpoint_ResumeStream_01_NominalBehaviors:
         """Test correct endpoint URL reconstruction for resumed HTTP streaming requests."""
         # Arrange
         prompt = "Discuss the future of programming"
-        model = "qwen/qwen3-8b"
+        model = TEST_MODEL
         
         # Create initial streaming request to establish endpoint URL state
         stream_iterator = completions_endpoint.create(
@@ -912,7 +904,7 @@ class Test_CompletionsEndpoint_ResumeStream_02_NegativeBehaviors:
             "endpoint": "https://openrouter.ai/api/v1/completions",
             "headers": {"Authorization": "Bearer invalid_expired_token"},
             "prompt": "Test prompt",
-            "params": {"model": "qwen/qwen3-8b", "max_tokens": 20, "stream": True},
+            "params": {"model": TEST_MODEL, "max_tokens": 20, "stream": True},
             "position": 0
         }
         
@@ -928,9 +920,9 @@ class Test_CompletionsEndpoint_ResumeStream_02_NegativeBehaviors:
         # Arrange - Create state with invalid endpoint URL
         invalid_endpoint_state = {
             "endpoint": "https://invalid-endpoint.example.com/api/v1/completions",
-            "headers": {"Authorization": f"Bearer {os.environ.get('OPENROUTER_API_KEY')}"},
+            "headers": {"Authorization": "Bearer test-key"},
             "prompt": "Test prompt",
-            "params": {"model": "qwen/qwen3-8b", "max_tokens": 20, "stream": True},
+            "params": {"model": TEST_MODEL, "max_tokens": 20, "stream": True},
             "position": 0
         }
         
@@ -952,7 +944,7 @@ class Test_CompletionsEndpoint_ResumeStream_03_BoundaryBehaviors:
             "headers": {"Authorization": f"Bearer {os.environ.get('OPENROUTER_API_KEY')}"},
             "prompt": "Minimal test",
             "params": {
-                "model": "qwen/qwen3-8b", 
+                "model": TEST_MODEL,
                 "max_tokens": 10, 
                 "stream": True
             },
@@ -974,7 +966,7 @@ class Test_CompletionsEndpoint_ResumeStream_03_BoundaryBehaviors:
         """Test resume streaming at maximum allowed position offset."""
         # Arrange - First create a real streaming request
         prompt = "Create a comprehensive guide"
-        model = "qwen/qwen3-8b"
+        model = TEST_MODEL
         
         # Start stream and consume significant portion
         stream_iterator = completions_endpoint.create(
@@ -1026,9 +1018,10 @@ class Test_CompletionsEndpoint_ResumeStream_04_ErrorHandlingBehaviors:
             "method": "POST",
             "headers": {"Content-Type": "application/json", "Accept": "application/json"},
             "params": {},
-            "data": {"prompt": "Test auth failure", "model": "qwen/qwen3-8b", "max_tokens": 20, "stream": True},
+            "data": {"prompt": "Test auth failure", "model": TEST_MODEL, "max_tokens": 20, "stream": True},
             "accumulated_data": "",
             "last_position": 0,
+            "chunk_size": 8192,
             "total_size": None,
             "etag": None,
             "last_updated": "2025-05-27T00:00:00Z",
@@ -1054,9 +1047,9 @@ class Test_CompletionsEndpoint_ResumeStream_04_ErrorHandlingBehaviors:
         # Arrange - Create state pointing to unreachable endpoint
         connection_failure_state = {
             "endpoint": "https://unreachable-host-12345.example.com/api/v1/completions",
-            "headers": {"Authorization": f"Bearer {os.environ.get('OPENROUTER_API_KEY')}"},
+            "headers": {"Authorization": "Bearer test-key"},
             "prompt": "Test connection failure",
-            "params": {"model": "qwen/qwen3-8b", "max_tokens": 20, "stream": True},
+            "params": {"model": TEST_MODEL, "max_tokens": 20, "stream": True},
             "position": 0
         }
         
@@ -1074,7 +1067,7 @@ class Test_CompletionsEndpoint_ResumeStream_05_StateTransitionBehaviors:
         """Test state restoration from file to active HTTP streaming connection."""
         # Arrange - Create valid streaming HTTP request
         prompt = "Write about the evolution of computer science"
-        model = "qwen/qwen3-8b"
+        model = TEST_MODEL
         
         # Start initial HTTP stream
         initial_stream = completions_endpoint.create(
@@ -1104,7 +1097,7 @@ class Test_CompletionsEndpoint_ResumeStream_05_StateTransitionBehaviors:
         """Test transition from saved state to active HTTP request processing."""
         # Arrange
         prompt = "Analyze the impact of artificial intelligence"
-        model = "qwen/qwen3-8b"
+        model = TEST_MODEL
         
         # Create initial HTTP streaming request
         stream_iterator = completions_endpoint.create(
@@ -1140,7 +1133,7 @@ class Test_CompletionsEndpoint_ResumeStream_05_StateTransitionBehaviors:
         """Test authentication state recovery during HTTP stream resumption."""
         # Arrange - Create authenticated HTTP streaming session
         prompt = "Discuss quantum computing applications"
-        model = "qwen/qwen3-8b"
+        model = TEST_MODEL
         
         # Start authenticated HTTP stream
         stream_iterator = completions_endpoint.create(

@@ -7,6 +7,8 @@ from openrouter_client.auth import AuthManager
 from openrouter_client.http import HTTPManager
 from openrouter_client.exceptions import APIError, AuthenticationError, OpenRouterError
 
+pytestmark = pytest.mark.usefixtures("provisioning_api_key")
+
 
 @pytest.fixture
 def valid_auth_manager():

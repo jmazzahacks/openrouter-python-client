@@ -20,6 +20,9 @@ from openrouter_client.endpoints.chat import ChatEndpoint
 from openrouter_client.exceptions import ResumeError
 
 
+# Override when a provider is unavailable; errors still fail the tests.
+TEST_MODEL = os.getenv("OPENROUTER_TEST_MODEL", "openai/gpt-4o-mini")
+
 class TestFixtures:
     """Shared fixtures and utilities for OpenRouter API testing."""
     
@@ -131,7 +134,7 @@ class Test_ChatEndpoint_Init_02_NegativeBehaviors(TestFixtures):
         
         # Assert - endpoint initializes but API calls should fail with auth errors
         with pytest.raises(Exception) as exc_info:
-            endpoint.create([{"role": "user", "content": "test"}], model="qwen/qwen3-8b")
+            endpoint.create([{"role": "user", "content": "test"}], model=TEST_MODEL)
         
         # Verify it's an authentication-related error (401 status code)
         error_msg = str(exc_info.value).lower()
@@ -150,7 +153,7 @@ class Test_ChatEndpoint_Init_02_NegativeBehaviors(TestFixtures):
         
         # Assert - endpoint initializes but API calls should fail with network errors
         with pytest.raises(Exception) as exc_info:
-            endpoint.create([{"role": "user", "content": "test"}], model="qwen/qwen3-8b")
+            endpoint.create([{"role": "user", "content": "test"}], model=TEST_MODEL)
         
         # Verify it's a network-related error
         assert any(term in str(exc_info.value).lower() for term in ['connection', 'network', 'resolve', 'url'])
@@ -204,7 +207,7 @@ class Test_ChatEndpoint_Init_04_ErrorHandlingBehaviors(TestFixtures):
         
         # Assert - initialization succeeds but API calls fail gracefully
         with pytest.raises(Exception) as exc_info:
-            endpoint.create([{"role": "user", "content": "test"}], model="qwen/qwen3-8b")
+            endpoint.create([{"role": "user", "content": "test"}], model=TEST_MODEL)
         
         assert any(term in str(exc_info.value).lower() for term in ['connection', 'refused', 'timeout'])
 
@@ -234,7 +237,7 @@ class Test_ChatEndpoint_Init_05_StateTransitionBehaviors(TestFixtures):
         # Verify endpoint is ready for API calls by making a simple request
         response = endpoint.create(
             [{"role": "user", "content": "Say hello"}], 
-            model="qwen/qwen3-8b",
+            model=TEST_MODEL,
             max_tokens=10
         )
         assert response is not None
@@ -244,10 +247,10 @@ class Test_ChatEndpoint_Create_01_NominalBehaviors(TestFixtures):
     """Test nominal behaviors for ChatEndpoint.create with OpenRouter API."""
     
     @pytest.mark.parametrize("model", [
-        "anthropic/claude-3-haiku",
+        "anthropic/claude-haiku-4.5",
         "mistralai/mistral-small-3.1-24b-instruct", 
         "openai/gpt-4o-mini-2024-07-18",
-        "qwen/qwen3-8b"
+        TEST_MODEL
     ])
     def test_standard_chat_completion_requests(self, chat_endpoint: ChatEndpoint, valid_messages: List[Dict], model: str):
         """
@@ -287,7 +290,7 @@ class Test_ChatEndpoint_Create_01_NominalBehaviors(TestFixtures):
         # Act
         response = chat_endpoint.create(
             messages=valid_messages,
-            model="qwen/qwen3-8b",
+            model=TEST_MODEL,
             stream=stream,
             max_tokens=50
         )
@@ -410,26 +413,23 @@ class Test_ChatEndpoint_Create_02_NegativeBehaviors(TestFixtures):
     ])
     def test_malformed_request_parameters(self, chat_endpoint: ChatEndpoint, valid_messages: List[Dict], invalid_param: str, value):
         """
-        Test OpenRouter API errors for unsupported parameters or malformed requests.
+        Test opt-in validation for malformed request parameters.
         
         Arrange: Valid messages but invalid parameters
         Act: Send request with malformed parameters
-        Assert: Parameter validation errors from OpenRouter
+        Assert: Client validation errors before a provider can normalize the input
         """
         # Arrange
         kwargs = {invalid_param: value}
         
         # Act & Assert
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(ValueError, match="Invalid request parameters"):
             chat_endpoint.create(
                 messages=valid_messages,
-                model="qwen/qwen3-8b",
+                model=TEST_MODEL,
+                validate_request=True,
                 **kwargs
             )
-        
-        # Verify error occurs (API returns generic 400 errors for bad parameters)
-        error_msg = str(exc_info.value).lower()
-        assert any(term in error_msg for term in ['400', 'api error', 'parameter', 'invalid', 'range', 'validation']) or hasattr(exc_info.value, 'status_code') and exc_info.value.status_code == 400
 
 
 class Test_ChatEndpoint_Create_03_BoundaryBehaviors(TestFixtures):
@@ -449,7 +449,7 @@ class Test_ChatEndpoint_Create_03_BoundaryBehaviors(TestFixtures):
         # Act
         response = chat_endpoint.create(
             messages=valid_messages,
-            model="qwen/qwen3-8b",
+            model=TEST_MODEL,
             max_tokens=token_limit
         )
         
@@ -482,7 +482,7 @@ class Test_ChatEndpoint_Create_03_BoundaryBehaviors(TestFixtures):
         # Act
         response = chat_endpoint.create(
             messages=messages,
-            model="qwen/qwen3-8b",
+            model=TEST_MODEL,
             max_tokens=50
         )
         
@@ -546,7 +546,7 @@ class Test_ChatEndpoint_Create_04_ErrorHandlingBehaviors(TestFixtures):
         try:
             response = chat_endpoint.create(
                 messages=valid_messages,
-                model="qwen/qwen3-8b",
+                model=TEST_MODEL,
                 max_tokens=50
             )
             # If successful, verify response
@@ -570,7 +570,7 @@ class Test_ChatEndpoint_Create_04_ErrorHandlingBehaviors(TestFixtures):
         try:
             response = chat_endpoint.create(
                 messages=valid_messages,
-                model="qwen/qwen3-8b",
+                model=TEST_MODEL,
                 max_tokens=50
             )
             # If successful, verify response
@@ -636,7 +636,7 @@ class Test_ChatEndpoint_Create_05_StateTransitionBehaviors(TestFixtures):
         # Act
         response = chat_endpoint.create(
             messages=valid_messages,
-            model="qwen/qwen3-8b",
+            model=TEST_MODEL,
             stream=stream,
             max_tokens=50
         )

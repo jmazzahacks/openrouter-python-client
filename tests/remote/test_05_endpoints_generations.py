@@ -111,8 +111,9 @@ class Test_GenerationsEndpoint_Get_02_NegativeBehaviors:
         # Act & Assert
         with pytest.raises(APIError) as exc_info:
             generations_endpoint.get(invalid_id)
-        # Should get a 404 or similar error for invalid ID
-        assert "404" in str(exc_info.value) or "not found" in str(exc_info.value).lower()
+        # A malformed ID is rejected before a not-found lookup.
+        assert exc_info.value.status_code == 400
+        assert "id" in str(exc_info.value).lower()
     
     def test_get_with_empty_generation_id(self, generations_endpoint):
         """Test retrieving generation metadata with an empty generation ID."""

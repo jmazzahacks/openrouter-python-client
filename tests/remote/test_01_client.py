@@ -20,7 +20,7 @@ def client():
     return OpenRouterClient()
 
 @pytest.fixture(scope="session")
-def client_with_provisioning():
+def client_with_provisioning(provisioning_api_key):
     """
     Client instance with provisioning API key for credits operations.
     """
@@ -98,14 +98,16 @@ class Test_OpenRouterClient_RefreshContextLengths_02_NegativeBehaviors:
                 del os.environ["OPENROUTER_API_KEY"]
 
 class Test_OpenRouterClient_RefreshContextLengths_03_BoundaryBehaviors:
-    @pytest.mark.parametrize("boundary_value", [4096, 8192, 32768])
-    def test_contains_known_boundary_context_lengths(self, client, boundary_value):
-        # Arrange / Act
+    def test_preserves_catalog_context_length_boundaries(self, client):
+        # Catalog sizes change as models retire; compare with the live catalog.
+        models = [m for m in client.models.list(details=True).data if m.context_length]
+        assert models
         lengths = client.refresh_context_lengths()
-        # Assert
-        assert boundary_value in lengths.values(), (
-            f"Expected at least one model with context_length={boundary_value}"
-        )
+        for model in (
+            min(models, key=lambda m: m.context_length),
+            max(models, key=lambda m: m.context_length),
+        ):
+            assert lengths[model.id] == model.context_length
 
 class Test_OpenRouterClient_RefreshContextLengths_04_ErrorHandlingBehaviors:
     def test_network_error_raises_api_error(self, bad_client):
@@ -140,16 +142,12 @@ class Test_OpenRouterClient_CalculateRateLimits_01_NominalBehaviors:
         assert rl["period"] == 60
         assert isinstance(rl["cooldown"], (int, float)) and rl["cooldown"] >= 0
     
-    def test_allows_without_provisioning_key(self, client):
-        # Arrange (client without provisioning key)
-        # Act - OpenRouter API allows calculating rate limits without provisioning key
-        result = client.calculate_rate_limits()
-        # Assert - Returns default rate limit config
-        assert isinstance(result, dict)
-        assert "requests" in result
-        assert "period" in result
-        assert "cooldown" in result
-        assert result["requests"] >= 1
+    def test_requires_provisioning_key(self):
+        # The library reads account credits, which require provisioning auth.
+        with OpenRouterClient(provisioning_api_key="") as client:
+            with pytest.raises(APIError) as exc_info:
+                client.calculate_rate_limits()
+        assert isinstance(exc_info.value.__cause__, AuthenticationError)
 
 class Test_OpenRouterClient_CalculateRateLimits_02_NegativeBehaviors:
     @pytest.mark.parametrize("invalid_key", [None, "", "invalid_api_key"])
@@ -169,13 +167,9 @@ class Test_OpenRouterClient_CalculateRateLimits_02_NegativeBehaviors:
             else:
                 # Set the invalid key in env
                 os.environ["OPENROUTER_API_KEY"] = invalid_key
-                c = OpenRouterClient()
-                # Act - OpenRouter API allows calculating rate limits even with invalid key
-                result = c.calculate_rate_limits()
-                # Assert - Returns default rate limit config
-                assert isinstance(result, dict)
-                assert "requests" in result
-                assert result["requests"] >= 1
+                with OpenRouterClient(provisioning_api_key="invalid_key") as c:
+                    with pytest.raises(APIError):
+                        c.calculate_rate_limits()
         finally:
             # Restore original env
             if original_key:

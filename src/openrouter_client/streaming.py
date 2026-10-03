@@ -29,6 +29,9 @@ from .auth import AuthManager
 logger = logging.getLogger(__name__)
 T = TypeVar('T')
 
+# Match the earliest event boundary, including mixed LF/CRLF line endings.
+_SSE_EVENT_END = re.compile(rb'\r?\n\r?\n')
+
 
 class OpenRouterStreamingState(BaseStreamingState):
     """
@@ -276,32 +279,39 @@ class StreamingCompletionsRequest(AbstractStreamingRequest):
                     break
                     
                 if chunk:
-                    self.position += len(chunk)
-                    self.accumulated_data.extend(chunk)
-                    
                     # Add the chunk to our buffer and process complete lines
                     buffer += chunk
                     
                     # Process any complete SSE messages
-                    while b'\n\n' in buffer or b'\r\n\r\n' in buffer:
-                        # Find the end of the SSE message
-                        if b'\r\n\r\n' in buffer:
-                            message, buffer = buffer.split(b'\r\n\r\n', 1)
-                        else:
-                            message, buffer = buffer.split(b'\n\n', 1)
+                    while (event_end := _SSE_EVENT_END.search(buffer)) is not None:
+                        message = buffer[:event_end.start()]
+                        separator = event_end.group()
+                        buffer = buffer[event_end.end():]
                         
                         # Process the SSE message and yield any valid completions
                         completions = self.process_chunk(message + b'\n\n')
+                        # Persist before yielding: the caller may pause after any
+                        # event. Do not checkpoint later events still in buffer.
+                        self.position += len(message) + len(separator)
+                        self.accumulated_data.extend(message + separator)
+                        if self.state_file:
+                            self.save_state()
                         for completion in completions:
                             yield completion
+                            if self._cancelled:
+                                return
                     
-                    self.save_state()
-            
             # Process any remaining buffer content if not cancelled
             if buffer and not self._cancelled:
                 completions = self.process_chunk(buffer)
+                self.position += len(buffer)
+                self.accumulated_data.extend(buffer)
+                if self.state_file:
+                    self.save_state()
                 for completion in completions:
                     yield completion
+                    if self._cancelled:
+                        return
             
             # Mark as completed only if not cancelled
             if not self._cancelled:
@@ -449,32 +459,39 @@ class StreamingCompletionsRequest(AbstractStreamingRequest):
                     break
                     
                 if chunk:
-                    self.position += len(chunk)
-                    self.accumulated_data.extend(chunk)
-                    
                     # Add the chunk to our buffer and process complete lines
                     buffer += chunk
                     
                     # Process any complete SSE messages
-                    while b'\n\n' in buffer or b'\r\n\r\n' in buffer:
-                        # Find the end of the SSE message
-                        if b'\r\n\r\n' in buffer:
-                            message, buffer = buffer.split(b'\r\n\r\n', 1)
-                        else:
-                            message, buffer = buffer.split(b'\n\n', 1)
+                    while (event_end := _SSE_EVENT_END.search(buffer)) is not None:
+                        message = buffer[:event_end.start()]
+                        separator = event_end.group()
+                        buffer = buffer[event_end.end():]
                         
                         # Process the SSE message and yield any valid completions
                         completions = self.process_chunk(message + b'\n\n')
+                        # Persist before yielding: the caller may pause after any
+                        # event. Do not checkpoint later events still in buffer.
+                        self.position += len(message) + len(separator)
+                        self.accumulated_data.extend(message + separator)
+                        if self.state_file:
+                            self.save_state()
                         for completion in completions:
                             yield completion
+                            if self._cancelled:
+                                return
                     
-                    self.save_state()
-            
             # Process any remaining buffer content if not cancelled
             if buffer and not self._cancelled:
                 completions = self.process_chunk(buffer)
+                self.position += len(buffer)
+                self.accumulated_data.extend(buffer)
+                if self.state_file:
+                    self.save_state()
                 for completion in completions:
                     yield completion
+                    if self._cancelled:
+                        return
             
             # Mark as completed only if not cancelled
             if not self._cancelled:
@@ -705,34 +722,39 @@ class StreamingChatCompletionsRequest(AbstractStreamingRequest):
                     break
                     
                 if chunk:
-                    self.position += len(chunk)
-                    self.accumulated_data.extend(chunk)
-                    
                     # Add the chunk to our buffer and process complete lines
                     buffer += chunk
                     
                     # Process any complete SSE messages
-                    while b'\n\n' in buffer or b'\r\n\r\n' in buffer:
-                        # Find the end of the SSE message
-                        if b'\r\n\r\n' in buffer:
-                            message, buffer = buffer.split(b'\r\n\r\n', 1)
-                        else:
-                            message, buffer = buffer.split(b'\n\n', 1)
+                    while (event_end := _SSE_EVENT_END.search(buffer)) is not None:
+                        message = buffer[:event_end.start()]
+                        separator = event_end.group()
+                        buffer = buffer[event_end.end():]
                         
                         # Process the SSE message and yield any valid completions
                         completions = self.process_chunk(message + b'\n\n')
-                        self.completions.append(completions)
+                        # Persist before yielding: the caller may pause after any
+                        # event. Do not checkpoint later events still in buffer.
+                        self.position += len(message) + len(separator)
+                        self.accumulated_data.extend(message + separator)
+                        if self.state_file:
+                            self.save_state()
                         for completion in completions:
                             yield completion
+                            if self._cancelled:
+                                return
                     
-                    self.save_state()
-            
             # Process any remaining buffer content if not cancelled
             if buffer and not self._cancelled:
                 completions = self.process_chunk(buffer)
-                self.completions.append(completions)
+                self.position += len(buffer)
+                self.accumulated_data.extend(buffer)
+                if self.state_file:
+                    self.save_state()
                 for completion in completions:
                     yield completion
+                    if self._cancelled:
+                        return
             
             # Mark as completed only if not cancelled
             if not self._cancelled:
@@ -802,7 +824,7 @@ class StreamingChatCompletionsRequest(AbstractStreamingRequest):
                     raw_data = str(state.accumulated_data)
                 
                 # Process the SSE format data
-                for line in raw_data.split("\n\n"):
+                for line in raw_data.replace("\r\n", "\n").split("\n\n"):
                     if line.startswith("data: ") and line != "data: [DONE]":
                         try:
                             # Extract JSON from the data line
@@ -868,34 +890,39 @@ class StreamingChatCompletionsRequest(AbstractStreamingRequest):
                     break
                     
                 if chunk:
-                    self.position += len(chunk)
-                    self.accumulated_data.extend(chunk)
-                    
                     # Add the chunk to our buffer and process complete lines
                     buffer += chunk
                     
                     # Process any complete SSE messages
-                    while b'\n\n' in buffer or b'\r\n\r\n' in buffer:
-                        # Find the end of the SSE message
-                        if b'\r\n\r\n' in buffer:
-                            message, buffer = buffer.split(b'\r\n\r\n', 1)
-                        else:
-                            message, buffer = buffer.split(b'\n\n', 1)
+                    while (event_end := _SSE_EVENT_END.search(buffer)) is not None:
+                        message = buffer[:event_end.start()]
+                        separator = event_end.group()
+                        buffer = buffer[event_end.end():]
                         
                         # Process the SSE message and yield any valid completions
                         completions = self.process_chunk(message + b'\n\n')
-                        self.completions.append(completions)
+                        # Persist before yielding: the caller may pause after any
+                        # event. Do not checkpoint later events still in buffer.
+                        self.position += len(message) + len(separator)
+                        self.accumulated_data.extend(message + separator)
+                        if self.state_file:
+                            self.save_state()
                         for completion in completions:
                             yield completion
+                            if self._cancelled:
+                                return
                     
-                    self.save_state()
-            
             # Process any remaining buffer content if not cancelled
             if buffer and not self._cancelled:
                 completions = self.process_chunk(buffer)
-                self.completions.append(completions)
+                self.position += len(buffer)
+                self.accumulated_data.extend(buffer)
+                if self.state_file:
+                    self.save_state()
                 for completion in completions:
                     yield completion
+                    if self._cancelled:
+                        return
             
             # Mark as completed only if not cancelled
             if not self._cancelled:
