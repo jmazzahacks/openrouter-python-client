@@ -88,7 +88,8 @@ class OpenRouterClient:
                  base_url: str = "https://openrouter.ai/api/v1", 
                  organization_id: Optional[str] = None,
                  reference_id: Optional[str] = None,
-                 **kwargs):
+                 initialize_rate_limit: bool = True,
+                 **kwargs: Any) -> None:
         # Initialize context lengths registry
         self._context_lengths: Dict[str, int] = {}
         """
@@ -101,6 +102,8 @@ class OpenRouterClient:
             base_url (str): Base URL for the API. Defaults to "https://openrouter.ai/api/v1".
             organization_id (Optional[str]): Organization ID for request tracking.
             reference_id (Optional[str]): Reference ID for request tracking.
+            initialize_rate_limit (bool): Fetch key rate limits at startup. Set False
+                to construct the client without an OpenRouter API request.
             **kwargs: Additional configuration options.
         
         Raises:
@@ -124,7 +127,9 @@ class OpenRouterClient:
             
             # Configure SmartSurge client parameters
             timeout = kwargs.get('timeout', 60.0)
-            retries = kwargs.get('retries', 3)
+            retries = kwargs.get('retries', kwargs.get('max_retries', 3))
+            if 'max_retries' in kwargs and kwargs['max_retries'] != retries:
+                raise ValueError("retries and max_retries must agree")
             backoff_factor = kwargs.get('backoff_factor', 0.5)
             rate_limit = kwargs.get('rate_limit', None)
 
@@ -150,7 +155,8 @@ class OpenRouterClient:
             self._initialize_endpoints()
             
             # Set rate limit from API key information
-            self._initialize_rate_limit()
+            if initialize_rate_limit:
+                self._initialize_rate_limit()
             
             self.logger.debug(
                 f"OpenRouterClient initialized successfully with base_url={base_url}, "

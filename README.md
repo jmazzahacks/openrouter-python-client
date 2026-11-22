@@ -141,6 +141,40 @@ cannot be safely re-sent.
 > transport-level retries for 5xx/connection errors; `RetryConfig` is the 429-specific
 > policy and is independent of them.
 
+### Caller-managed retries (for example, Celery)
+
+```python
+client = OpenRouterClient(
+    api_key="your-api-key",
+    retries=0,
+    timeout=(10.0, 90.0),  # connect timeout, read inactivity timeout
+    initialize_rate_limit=False,
+)
+```
+
+`initialize_rate_limit=False` skips the startup key lookup. With an explicit key
+and the default secrets manager, construction makes no network requests.
+`retries=0` selects a requests transport that makes one attempt per request:
+no SmartSurge retries, rate-limit sleeps, or automatic redirects. A 429 raises
+`RateLimitExceeded` (including the response and `retry_after`); 5xx and redirects
+raise `APIError`. Network failures, including timeouts, raise `APIError` with the
+original requests exception as their cause. The caller owns scheduling/backoff.
+Streaming uses the same single-attempt transport and retains its streaming error
+types; explicit stream resume or additional prompt/tool calls are new requests.
+
+Zero retries cannot be combined with enabled `RetryConfig`, a supplied HTTP client,
+or a configured client-side rate limit. These combinations raise `ValueError`.
+Positive `retries` values now correctly map to SmartSurge's `max_retries` option;
+`max_retries` is also accepted as an alias, and conflicting values are rejected.
+The SmartSurge caveats above apply when retries are positive.
+
+Endpoint calls inherit the constructor timeout; a direct `HTTPManager.request`
+timeout overrides it. Timeouts must be finite positive numbers or a pair of them.
+Requests timeouts bound connection waits and read inactivity, **not total wall-clock
+duration** (including DNS and a response that keeps sending bytes). Use your worker's
+task deadline when a strict overall duration is required. Close the client when done
+or use it as a context manager.
+
 ## Examples
 
 ### Text embeddings
