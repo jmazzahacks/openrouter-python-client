@@ -21,6 +21,7 @@ from smartsurge.exceptions import RateLimitExceeded as SmartSurgeRateLimitExceed
 
 from .exceptions import APIError, RateLimitExceeded, OpenRouterError
 from .types import RequestMethod
+from .transport import SingleAttemptClient, validate_timeout
 
 
 class RetryConfig(BaseModel):
@@ -80,7 +81,7 @@ class HTTPManager:
     Manages HTTP communications with the OpenRouter API.
     
     Attributes:
-        client (SmartSurgeClient or requests.Session): HTTP client with rate limiting.
+        client: SmartSurge client, or single-attempt transport when retries=0.
         base_url (str): Base URL for API requests.
         logger (logging.Logger): HTTP communication logger.
     """
@@ -89,7 +90,7 @@ class HTTPManager:
                  base_url: Optional[str] = None,
                  client: Optional[SmartSurgeClient] = None,
                  retry_config: Optional[RetryConfig] = None,
-                 **kwargs):
+                 **kwargs: Any) -> None:
         """
         Initialize the HTTP manager.
 
@@ -98,7 +99,10 @@ class HTTPManager:
             client (Optional[SmartSurgeClient]): Pre-configured HTTP client. If None, one is created.
             retry_config (Optional[RetryConfig]): Opt-in 429 retry-with-backoff policy. If None,
                 a disabled default is used (429s propagate immediately, preserving prior behavior).
-            kwargs: Additional arguments for SmartSurgeClient.
+            kwargs: SmartSurgeClient options. retries is an alias for max_retries.
+                Zero selects a transport without retries, redirects, or rate limiting
+                and cannot be combined with a custom client or enabled RetryConfig.
+                timeout is the default connect/read timeout for endpoint calls.
 
         Raises:
             OpenRouterError: If neither base_url nor client is provided.
@@ -111,6 +115,20 @@ class HTTPManager:
 
         # 429 retry/backoff policy (disabled by default for backward compatibility)
         self.retry_config = retry_config if retry_config is not None else RetryConfig()
+        if 'retries' in kwargs:
+            retries = kwargs.pop('retries')
+            if 'max_retries' in kwargs and kwargs['max_retries'] != retries:
+                raise ValueError("retries and max_retries must agree")
+            kwargs['max_retries'] = retries
+        self.single_attempt = kwargs.get('max_retries') == 0
+        self.timeout = validate_timeout(kwargs.get('timeout', 60.0))
+        if self.single_attempt:
+            if client is not None:
+                raise ValueError("retries=0 cannot guarantee a supplied client's behavior")
+            if self.retry_config.enabled:
+                raise ValueError("retries=0 cannot be combined with enabled RetryConfig")
+            if kwargs.get('rate_limit') is not None:
+                raise ValueError("retries=0 does not support client-side rate limiting")
         
         # Store base_url for forming full request URLs
         if base_url is None and client is not None:
@@ -119,7 +137,10 @@ class HTTPManager:
         else:
             self.base_url = base_url.rstrip("/") if base_url else ""
         
-        if client:
+        self.client: Union[SmartSurgeClient, SingleAttemptClient]
+        if self.single_attempt:
+            self.client = SingleAttemptClient(self.base_url, self.timeout)
+        elif client:
             # Use the provided client
             self.client = client
             self.logger.debug("Using provided HTTP client")
@@ -374,7 +395,7 @@ class HTTPManager:
         )
         
         # Determine the appropriate timeout to use (given or a reasonable default)
-        actual_timeout = timeout if timeout is not None else 60.0
+        actual_timeout = validate_timeout(timeout) if timeout is not None else self.timeout
         
         # Record the start time for performance tracking
         start_time = time.time()
@@ -404,6 +425,12 @@ class HTTPManager:
             # Handle error responses (non-2xx status codes)
             if not 200 <= response.status_code < 300:
                 if 300 <= response.status_code < 400:
+                    if self.single_attempt:
+                        raise APIError(
+                            message="Redirect refused in single-attempt mode",
+                            status_code=response.status_code,
+                            response=response,
+                        )
                     # Handle redirects by retrying with allow_redirects=True
                     self.logger.info(f"Received {response.status_code} redirect, retrying with allow_redirects=True")
                     try:
